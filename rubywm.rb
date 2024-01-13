@@ -13,7 +13,14 @@ require_relative 'desktop.rb'
 require_relative 'tiled.rb'
 require_relative '../type_dispatcher'
 
+Thread.abort_on_exception = true
+
 dpy = X11::Display.new
+
+# FIXME: This is a workaround for a deadlock
+dpy.atom(:WM_CLASS)
+dpy.atom(:STRING)
+
 
 $wm = WindowManager.new(dpy, num_desktops: 10)
 
@@ -24,7 +31,7 @@ d = TypeDispatcher.new($wm)
 d.on(:client_message) do |ev|
   data = ev.data.unpack("V*")
   name = dpy.get_atom_name(ev.type)
-  p [name, data]
+  p [name, data, ev]
   d.(name, ev.window, *data)
 end
 
@@ -40,7 +47,7 @@ loop do
   end
 
   p ev
-  
+   
   case ev
   when X11::Form::ButtonPress
     if ev.child # Whichever button, we want to know more about this window

@@ -18,7 +18,7 @@ class TiledLayout
   end
 
   # FIXME: Pass this in
-  def windows = @desktop.children
+  def windows = @desktop.children.find_all{|w| w.mapped && !w.floating?}
   def cleanup = (@root = Node(@root.keep(windows)))
   def find(w) = @root.find(w)
 

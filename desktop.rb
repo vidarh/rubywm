@@ -8,10 +8,7 @@ class Desktop
   def show     = children.each(&:show)
   def hide     = children.each(&:hide)
   def inspect  = "<Desktop id=#{id} window=#{@window}>"
-
-  def update_layout
-   (layout&.call if active?)
-  end
+  def update_layout = (layout&.call if active?)
 end
 
 

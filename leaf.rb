@@ -3,6 +3,8 @@ class Leaf
   attr_accessor :window, :parent
   attr_accessor :iclass
 
+  def inspect = "<Leaf @window=#{@window.inspect}, @iclass=#{@iclass} @parent=#{@parent.object_id}>"
+  
   def initialize(window=nil, parent: nil, iclass: nil)
     @window, @parent, @iclass = window, parent, iclass
   end

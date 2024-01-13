@@ -1,6 +1,8 @@
 class Node
   attr_accessor :split, :nodes, :dir, :parent
 
+  def inspect = "<Node @nodes=#{@nodes.inspect}, @dir=#{@dir.inspect} @split=#{@split.inspect} @parent=#{@parent.object_id}>"
+      
   def initialize(nodes=[], parent: nil, dir: nil)
     @nodes = Array(nodes.dup)
     @nodes.each{|n| n.parent = self }

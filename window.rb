@@ -1,6 +1,4 @@
 
-require_relative '../xwindow'
-
 # FIXME: 10000 pixels should be enough for anyone ...
 # Until it isn't.
 HIDDEN_OFFSET=10000
@@ -9,16 +7,22 @@ MAX_WIDTH=1920
 
 class Window < X11::Window
   attr_reader :desktop, :hidden
+  attr_writer :floating
+
+  # We largely stay out of this, other than to keep
+  # it out of the layout
+  attr_accessor :mapped
 
   def eql?(other) = (wid == other&.wid)
   def ==(other) = eql?(other)
 
-  def initialize(wm, wid, desktop=nil)
+  def initialize(wm, wid, desktop=nil, floating: false)
     super(wm.dpy, wid)
     @wm = wm
     self.desktop = desktop
     @hidden = false
     @realgeom = get_geometry rescue nil
+    @floating = floating
 
     # This is a "safety" workaround
     # during development to avoid "losing" windows
@@ -43,7 +47,7 @@ class Window < X11::Window
 
   # FIXME: This should be an explicit flag, because as it is
   # here we can't make a floating window on a tiling desktop.
-  def floating? = @desktop.layout.nil?
+  def floating? = @desktop.layout.nil? || @floating
 
   def hide
     return if @hidden
@@ -58,10 +62,11 @@ class Window < X11::Window
     resize_to_geom(@realgeom) if @realgeom
   end
 
+  # We should rarely map a window ourselves, but if we do,
+  # we should enforce the stacking.
   def map
-    dpy.map_window(@wid)
-    self.lower if desktop?
-    self.raise if dock?
+    super
+    stack
   end
   
   def desktop= d
@@ -99,7 +104,7 @@ class Window < X11::Window
     return lower if desktop?
     # FIXME: This is incomplete. Also may want to add a separate
     # classification method and cache result.
-    return raise if dock? ||
+    return self.raise if dock? ||
          type == dpy.atom(:_NET_WM_WINDOW_TYPE_TOOLTIP) ||
          type == dpy.atom(:_NET_WM_WINDOW_TYPE_DIALOG) ||
          type == dpy.atom(:_NET_WM_WINDOW_TYPE_SPLASH) ||
@@ -110,6 +115,8 @@ class Window < X11::Window
   def maximize = resize_to_geom(@wm.rootgeom, stack_mode: :above)
 
   def resize_to_geom(geom, **args)
+    # FIXME: Need to figure out what to do about these
+    return if geom == X11::Form::Error
     configure(x: geom.x + hidden_offset, y: geom.y, width: geom.width, height: geom.height, **args)
   end
 
