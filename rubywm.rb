@@ -18,16 +18,13 @@ Thread.abort_on_exception = true
 dpy = X11::Display.new
 
 # FIXME: This is a workaround for a deadlock
-dpy.atom(:WM_CLASS)
-dpy.atom(:STRING)
+#dpy.atom(:WM_CLASS)
+#dpy.atom(:STRING)
 
 
-$wm = WindowManager.new(dpy, num_desktops: 10)
+wm = WindowManager.new(dpy, num_desktops: 10)
 
-start = nil
-attr = nil
-
-d = TypeDispatcher.new($wm)
+d = TypeDispatcher.new(wm)
 d.on(:client_message) do |ev|
   data = ev.data.unpack("V*")
   name = dpy.get_atom_name(ev.type)
@@ -36,7 +33,6 @@ d.on(:client_message) do |ev|
 end
 
 loop do
-  # FIXME: Select properly
   ev = nil
   begin
     ev = dpy.next_packet
@@ -47,58 +43,5 @@ loop do
   end
 
   p ev
-   
-  case ev
-  when X11::Form::ButtonPress
-    if ev.child # Whichever button, we want to know more about this window
-      w = $wm.window(ev.child)
-      attr = w.get_geometry rescue nil
-      if attr
-        $wm.set_focus(w.wid)
-        start = ev
-      end
-    end
-  when X11::Form::MotionNotify # if start.button == 1 we move; if 3 we resize, all with the same request:
-    # TODO: If floating, do this; if tiling, find neighours and resize them too.
-
-    if ev.child != start.child
-      $wm.set_focus(ev.child)
-    end
-    
-    p [:MOTION, start, attr]
-    if start
-      xdiff = ev.root_x - start.root_x;
-      ydiff = ev.root_y - start.root_y;
-
-      if start&.child && attr
-        w = $wm.window(start.child)
-
-        # FIXME: Any other types we don't want to allow moving or resizing
-        begin
-          next if w.special?
-        rescue # FIXME
-        end
-        p w
-        if start.detail == 1 # Move
-          w.configure(x: attr.x + xdiff, y: attr.y + ydiff)
-        elsif start.detail == 3 # Resize
-          # If left/above the centre point, we grow/shrink the window to the left/top
-          # otherwise to the right/bottom. Doing it to the left/top requires
-          # moving it at the same time.
-          attr.x = attr.x + (ev.event_x-attr.x < attr.width / 2 ? xdiff : 0)
-          attr.y = attr.y + (ev.event_y-attr.y < attr.height/ 2 ? ydiff : 0)
-          attr.width  = attr.width + (ev.event_x-attr.x < attr.width  / 2 ? -xdiff : xdiff)
-          attr.height = attr.height+ (ev.event_y-attr.y < attr.height / 2 ? -ydiff : ydiff)
-          start.root_x = ev.root_x
-          start.root_y = ev.root_y
-          w.configure(x: attr.x, y: attr.y, width: attr.width, height: attr.height)
-        end
-      end
-    end
-  when X11::Form::ButtonRelease
-    # Make sure we don't accidentally operate on another window.
-    start.child = nil if start
-  else
-    d.(ev.class, ev)
-  end
+  d.(ev.class, ev)
 end

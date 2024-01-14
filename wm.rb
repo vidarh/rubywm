@@ -23,6 +23,7 @@ class WindowManager
     # FIXME: Config
     # FIXME: Improved way of specifying pre-designed layouts.
     r = desktops[1].layout.root
+    r.ratio = 0.5
     r.nodes[0] = Leaf.new(iclass: "todo-todo")
     r.nodes[1] = Node.new([
       Leaf.new(iclass: "todo-done"),
@@ -214,7 +215,7 @@ class WindowManager
     # FIXME: Switch focus (keep focus stack per desktop)
     old.hide
     change_property(:_NET_CURRENT_DESKTOP, :cardinal, d)
-    f = current_desktop&.children&.find {|w| !w.special?}
+    f = current_desktop&.mapped_regular_children&.first
     set_focus(f.wid) if f
   end
 
@@ -238,7 +239,7 @@ class WindowManager
   # FIXME: This needs tweaks. Especially for floating windows, where
   # what we really want is to e.g. treat partially overlapping windows
   # so that the one closest to *overlapping* the correct border is picked
-  def find_closest(w, dir, from = windows.values)
+  def find_closest(w, dir, from)
     g = w.get_geometry
 
     case dir
@@ -252,8 +253,6 @@ class WindowManager
     list = []
     p [:here]
     from.each do |win|
-      next if win.special?
-      next if !win.mapped
       p [:checking, win, dir]
       g2 = win.get_geometry rescue nil
       next if g2.nil?
@@ -312,6 +311,114 @@ class WindowManager
     p dpy.get_atom_name(ev.atom) rescue nil
   end
 
+  def on_button_press(ev)
+    return if !ev.child
+    w = window(ev.child)
+    @attr = w.get_geometry rescue nil
+    if @attr
+      set_focus(w.wid)
+      @start = ev
+    end
+  end
+
+  # FIXME: This does not yet handle tiling
+  def on_motion_notify(ev)
+    # @start.button == 1 -> move
+    # @start.button == 3 -> resize
+    if ev.child != @start.child
+      set_focus(ev.child) rescue nil # FIXME
+    end
+    return if !@start&.child || !@attr
+
+    xdiff = ev.root_x - @start.root_x;
+    ydiff = ev.root_y - @start.root_y;
+
+    w = window(@start.child)
+
+    # FIXME: Any other types we don't want to allow moving or resizing
+    begin
+      return if w.special?
+    rescue # FIXME: Why is this here?
+    end
+
+    #p w
+    if @start.detail == 1 # Move
+      w.configure(x: attr.x + xdiff, y: attr.y + ydiff)
+    elsif @start.detail == 3 # Resize
+      lr = (ev.event_x-@attr.x < @attr.width / 2)
+      tb = (ev.event_y-@attr.y < @attr.height/ 2)
+      if w.floating?
+        # If left/above the centre point, we grow/shrink the window to the left/top
+        # otherwise to the right/bottom. Doing it to the left/top requires
+        # moving it at the same time.
+        @attr.x = @attr.x + (lr ? xdiff : 0)
+        @attr.y = @attr.y + (tb ? ydiff : 0)
+        @attr.width  = @attr.width + (lr ? -xdiff : xdiff)
+        @attr.height = @attr.height+ (tb ? -ydiff : ydiff)
+        @start.root_x = ev.root_x
+        @start.root_y = ev.root_y
+        w.configure(x: @attr.x, y: @attr.y, width: @attr.width, height: @attr.height)
+      else
+        layout = current_desktop&.layout
+        if layout
+          prev = layout.find(w)
+          node = prev.parent
+          p :RESIZE
+          p [prev, node, layout.root]
+          while node #&& node != layout.root
+            p [lr, tb, node.dir, node]
+            if !lr.nil? && node.dir == :lr
+              dx = 0
+              if node.geom
+                dx = (((node.geom.width * node.ratio) + xdiff)/node.geom.width) - node.ratio
+              else
+                dx = 0.00
+              end
+              if node.nodes[0] == prev && !lr
+                # FIXME: This doesn't seem to matter
+                node.ratio += dx
+                @start.root_x = ev.root_x
+                lr = nil
+              elsif node.nodes[1] == prev
+                node.ratio += dx
+                @start.root_x = ev.root_x
+                lr = nil
+              end
+            end
+            if !tb.nil? && node.dir == :tb
+              dy = 0
+              if node.geom
+                dy = (((node.geom.height * node.ratio) + ydiff)/node.geom.height) - node.ratio
+              else
+                dy = 0.00
+              end
+              if node.nodes[0] == prev && !tb
+                # FIXME: This doesn't seem to matter
+                node.ratio += dy
+                @start.root_y = ev.root_y
+                node.ratio.clamp(0.1,0.9)
+                tb = nil
+              elsif node.nodes[1] == prev
+                node.ratio += dy
+                @start.root_y = ev.root_y
+                tb = nil
+              end
+            end
+            node.ratio = node.ratio.clamp(0.1,0.9)
+            prev = node
+            node = node.parent
+          end
+          p :RESIZE_DONE
+          layout.call
+        end
+      end
+    end
+  end
+
+  def on_button_release(ev)
+    @start.child = nil if @start
+  end
+
   def on_focus_in(ev)       = (set_focus(ev.event) if !focus)
   def on_enter_notify(ev)   = set_focus(ev.event)
   def on_unmap_notify(ev)   = window(ev.window)&.desktop&.update_layout
@@ -366,7 +473,7 @@ class WindowManager
   def on_rwm_focus(_, dir)
     dir = dpy.get_atom_name(dir).downcase.to_sym
     return if !@focus || @focus.special?
-    w = find_closest(@focus, dir, @focus.desktop.children)
+    w = find_closest(@focus, dir, @focus.desktop.mapped_regular_children)
     set_focus(w.wid) if w
   end
 
@@ -418,7 +525,7 @@ class WindowManager
       return
     end
 
-    w = find_closest(@focus, dir, @focus.desktop.children.find_all{_1.mapped})
+    w = find_closest(@focus, dir, @focus.desktop.mapped_regular_children)
 
     l1 = @focus.desktop&.layout&.find(@focus)
     l2 = w&.desktop&.layout&.find(w)
@@ -438,5 +545,4 @@ class WindowManager
       set_focus(@focus.wid)
     end
   end
-
 end

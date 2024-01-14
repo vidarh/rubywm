@@ -1,14 +1,16 @@
 class Node
-  attr_accessor :split, :nodes, :dir, :parent
+  attr_accessor :ratio, :nodes, :dir, :parent
+  attr_reader :geom
 
-  def inspect = "<Node @nodes=#{@nodes.inspect}, @dir=#{@dir.inspect} @split=#{@split.inspect} @parent=#{@parent.object_id}>"
+  def inspect = "<Node #{object_id} @nodes=#{@nodes.inspect}, @dir=#{@dir.inspect} @ratio=#{@ratio.inspect} @parent=#{@parent.object_id}>"
       
   def initialize(nodes=[], parent: nil, dir: nil)
     @nodes = Array(nodes.dup)
     @nodes.each{|n| n.parent = self }
     @parent = parent
-    @split = 0.5
+    @ratio = 0.5
     @dir = dir
+    @geom = nil # *current* geometry, subject to change at all time
   end
 
   # FIXME: Restate children, placements, find in terms of
@@ -47,6 +49,7 @@ class Node
     @dir ||= dir
     dir = @dir
     nextdir = {lr: :tb, tb: :lr}[dir]
+    @geom = geom.dup
     case @nodes.length
     when 0
     when 1
@@ -57,8 +60,8 @@ class Node
       end
       @nodes[0].layout(g, dir, level+1)
     when 2
-      @nodes[0].layout(split_geom(geom, dir, 0,gap), gap, nextdir, level+1)
-      @nodes[1].layout(split_geom(geom, dir, 1,gap), gap, nextdir, level+1)
+      @nodes[0].layout(split_geom(geom, dir, 0,gap, @ratio), gap, nextdir, level+1)
+      @nodes[1].layout(split_geom(geom, dir, 1,gap, @ratio), gap, nextdir, level+1)
     else
       STDERR.puts "WARNING: Too many nodes"
     end
