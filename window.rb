@@ -26,6 +26,7 @@ class Window < X11::Window
 
     # This is a "safety" workaround
     # during development to avoid "losing" windows
+
     if @realgeom && (@realgeom.x < 0 || @realgeom.x > MAX_WIDTH)
       # First try to strip the offset.
       if @realgeom.x >= HIDDEN_OFFSET
@@ -47,7 +48,7 @@ class Window < X11::Window
 
   # FIXME: This should be an explicit flag, because as it is
   # here we can't make a floating window on a tiling desktop.
-  def floating? = @desktop.layout.nil? || @floating
+  def floating? = @desktop&.layout.nil? || @floating
 
   def hide
     return if @hidden

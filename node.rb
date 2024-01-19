@@ -44,11 +44,12 @@ class Node
     end
   end
 
+  def self.swapdir(dir) = {lr: :tb, tb: :lr}[dir]
 
   def layout(geom, gap=GAP, dir = :lr, level = 0)
     @dir ||= dir
     dir = @dir
-    nextdir = {lr: :tb, tb: :lr}[dir]
+    nextdir = Node.swapdir(dir)
     @geom = geom.dup
     case @nodes.length
     when 0

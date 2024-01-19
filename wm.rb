@@ -82,10 +82,8 @@ class WindowManager
   # If we don't already know about this window, we "adopt" it.
   def adopt(wid, desktop=nil)
     return if wid.nil?
-    STDERR.puts "adopt: #{wid.to_s(16)}"
     w = @windows[wid] # To avoid infinite recursion, this *must not* use #window
     return w if w
-    STDERR.puts "adopt: #{wid.to_s(16)} 2"
     w = Window.new(self, wid)
     begin
       STDERR.puts "\e[35madopt6\e[0m: #{wid.to_s(16)}; type=#{w.type.inspect}"
@@ -116,28 +114,17 @@ class WindowManager
         # for event handling only
         return w
       end
-      STDERR.puts "\e[35madopt4\e[0m: #{wid.to_s(16)}"
       return w if attr.override_redirect
-      STDERR.puts "\e[35madopt9\e[0m: #{wid.to_s(16)}"
-      STDERR.puts attr.inspect
       w.mapped = attr.map_state != 0
-      STDERR.puts "\e[35madopt7\e[0m: #{wid.to_s(16)}"
       geom = w.get_geometry
-      STDERR.puts "\e[35madopt8\e[0m: #{wid.to_s(16)}"
       return w if geom.is_a?(X11::Form::Error)
-      STDERR.puts "adopt: #{wid.to_s(16)} 3"
-    
-      if geom.width < 2 || geom.height < 2 #|| (geom.x+geom.w) < 0 || (geom.y+geom.h) < 0
-        return w
-      end
 
-      p [:adopt, wid]
+      return w if geom.width < 2 || geom.height < 2
       @windows[wid] = w
 
       wms = w.get_property(:_NET_WM_STATE, :atom)&.value
       if wms == dpy.atom(:_NET_WM_STATE_ABOVE)
         # This seems like it's probably not a good idea.
-        p [:ignorin_raised]
         return w
       end
 
@@ -177,17 +164,16 @@ class WindowManager
     width  = rootgeom.width / 2 if width < 10
     height = rootgeom.height - 100 if height < 10
         
-    # FIXME: This is irrelevant if tiled layout, so maybe
-    # Factor out into floating layout
-    if x == 0
-      x = (rootgeom.width - width)/2
+    if w.floating?
+      x = (rootgeom.width  - width) /2 if x == 0
+      y = (rootgeom.height - height)/2 if y == 0
+      w.configure(x:, y:, width:, height:)
+    else
+      # We're cheekily claiming it's already been mapped
+      # so it's included in the layout
+      current_desktop.layout&.place_adjacent(w, @focus) if @focus
     end
-    if y == 0
-      y = (rootgeom.height - height)/2
-    end
-    w.configure(x:, y:, width:, height:)
     w.map
-    current_desktop.update_layout
     set_focus(wid) unless w.special?
   end
 
@@ -296,7 +282,8 @@ class WindowManager
 
    # FIXME: Shouldn't most of these be dispatched to the *window*?
   def on_map_notify(ev)
-    window(ev.window).mapped = true
+    w = window(ev.window)
+    w.mapped = true
     current_desktop.update_layout
   end
 
@@ -321,7 +308,6 @@ class WindowManager
     end
   end
 
-  # FIXME: This does not yet handle tiling
   def on_motion_notify(ev)
     # @start.button == 1 -> move
     # @start.button == 3 -> resize
@@ -343,7 +329,9 @@ class WindowManager
 
     #p w
     if @start.detail == 1 # Move
-      w.configure(x: attr.x + xdiff, y: attr.y + ydiff)
+      if w.floating?
+        w.configure(x: @attr.x + xdiff, y: @attr.y + ydiff)
+      end
     elsif @start.detail == 3 # Resize
       lr = (ev.event_x-@attr.x < @attr.width / 2)
       tb = (ev.event_y-@attr.y < @attr.height/ 2)
@@ -355,52 +343,33 @@ class WindowManager
         @attr.y = @attr.y + (tb ? ydiff : 0)
         @attr.width  = @attr.width + (lr ? -xdiff : xdiff)
         @attr.height = @attr.height+ (tb ? -ydiff : ydiff)
-        @start.root_x = ev.root_x
-        @start.root_y = ev.root_y
         w.configure(x: @attr.x, y: @attr.y, width: @attr.width, height: @attr.height)
       else
         layout = current_desktop&.layout
         if layout
           prev = layout.find(w)
           node = prev.parent
-          p :RESIZE
-          p [prev, node, layout.root]
           while node #&& node != layout.root
-            p [lr, tb, node.dir, node]
+            # FIXME: This duplication infuriates me, but it's inherent
+            # in having meaningful names for left/right/top/bottom/x/y
+            # It'd go away if using array indices, but is it worth it?
             if !lr.nil? && node.dir == :lr
-              dx = 0
-              if node.geom
-                dx = (((node.geom.width * node.ratio) + xdiff)/node.geom.width) - node.ratio
-              else
-                dx = 0.00
-              end
+              dx = node.geom ? (((node.geom.width * node.ratio) + xdiff)/node.geom.width) - node.ratio : 0.0
               if node.nodes[0] == prev && !lr
-                # FIXME: This doesn't seem to matter
                 node.ratio += dx
-                @start.root_x = ev.root_x
                 lr = nil
               elsif node.nodes[1] == prev
                 node.ratio += dx
-                @start.root_x = ev.root_x
                 lr = nil
               end
             end
             if !tb.nil? && node.dir == :tb
-              dy = 0
-              if node.geom
-                dy = (((node.geom.height * node.ratio) + ydiff)/node.geom.height) - node.ratio
-              else
-                dy = 0.00
-              end
+              dy = node.geom ? (((node.geom.height * node.ratio) + ydiff)/node.geom.height) - node.ratio : 0.0
               if node.nodes[0] == prev && !tb
-                # FIXME: This doesn't seem to matter
                 node.ratio += dy
-                @start.root_y = ev.root_y
-                node.ratio.clamp(0.1,0.9)
                 tb = nil
               elsif node.nodes[1] == prev
                 node.ratio += dy
-                @start.root_y = ev.root_y
                 tb = nil
               end
             end
@@ -412,6 +381,8 @@ class WindowManager
           layout.call
         end
       end
+      @start.root_x = ev.root_x
+      @start.root_y = ev.root_y
     end
   end
 
@@ -419,7 +390,7 @@ class WindowManager
     @start.child = nil if @start
   end
 
-  def on_focus_in(ev)       = (set_focus(ev.event) if !focus)
+  def on_focus_in(ev)       = focus || set_focus(ev.event)
   def on_enter_notify(ev)   = set_focus(ev.event)
   def on_unmap_notify(ev)   = window(ev.window)&.desktop&.update_layout
   def on_destroy_notify(ev) = destroy_window(ev.window)
@@ -474,6 +445,7 @@ class WindowManager
     dir = dpy.get_atom_name(dir).downcase.to_sym
     return if !@focus || @focus.special?
     w = find_closest(@focus, dir, @focus.desktop.mapped_regular_children)
+
     set_focus(w.wid) if w
   end
 
@@ -506,10 +478,11 @@ class WindowManager
 
   # Move the focused window, either swapping it into the container
   # of the nearest leaf (if tiled), or moving it stepwise if floating
+  # FIXME: Just have rwm move specify x/y *offsets* instead? Would
+  # save an (admittedly cached) get_atom_name
   def on_rwm_move(_,dir)
-    dir = dpy.get_atom_name(dir).downcase.to_sym
-    p [:on_rwm_move, dir]
     return if !@focus || @focus.special?
+    dir = dpy.get_atom_name(dir).downcase.to_sym
 
     if @focus.floating?
       # FIXME:
@@ -529,7 +502,6 @@ class WindowManager
 
     l1 = @focus.desktop&.layout&.find(@focus)
     l2 = w&.desktop&.layout&.find(w)
-    p [l1,l2]
     if l1 && l2
       l2.window = @focus
       l1.window = w
@@ -542,6 +514,7 @@ class WindowManager
       # https://stackoverflow.com/questions/62448181/how-do-i-monitor-mouse-movement-events-in-all-windows-not-just-one-on-x11
       # XInput v2.0
       # And then ignore enter/leave events. Seems stupid
+      # Investigate what Katriawm does?
       set_focus(@focus.wid)
     end
   end

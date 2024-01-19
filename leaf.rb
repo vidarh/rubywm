@@ -13,15 +13,12 @@ class Leaf
   def placements = @iclass ? self : nil
 
   def keep(k)
+    # FIXME
     return nil if !k.member?(window) && !@iclass
     p [:keep, self]
     self #return visible(window) ? self : nil
   end
 
-  def layout(geom, gap=nil, dir = nil, level = nil)
-    window.resize_to_geom(geom) if window
-  end
-
+  def layout(geom, ...) = window&.resize_to_geom(geom)
   def find(w) = (@window == w ? self : nil)
 end
-

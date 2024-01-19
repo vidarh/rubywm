@@ -16,13 +16,9 @@ require_relative '../type_dispatcher'
 Thread.abort_on_exception = true
 
 dpy = X11::Display.new
-
-# FIXME: This is a workaround for a deadlock
-#dpy.atom(:WM_CLASS)
-#dpy.atom(:STRING)
-
-
 wm = WindowManager.new(dpy, num_desktops: 10)
+
+# FIXME: This can also go into the WindowManager class
 
 d = TypeDispatcher.new(wm)
 d.on(:client_message) do |ev|
