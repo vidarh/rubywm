@@ -164,14 +164,13 @@ class WindowManager
     width  = rootgeom.width / 2 if width < 10
     height = rootgeom.height - 100 if height < 10
         
+    w.mapped = true
     if w.floating?
       x = (rootgeom.width  - width) /2 if x == 0
       y = (rootgeom.height - height)/2 if y == 0
       w.configure(x:, y:, width:, height:)
     else
-      # We're cheekily claiming it's already been mapped
-      # so it's included in the layout
-      current_desktop.layout&.place_adjacent(w, @focus) if @focus
+      current_desktop.layout&.place(w, @focus)
     end
     w.map
     set_focus(wid) unless w.special?
