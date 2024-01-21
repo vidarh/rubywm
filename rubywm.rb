@@ -7,6 +7,7 @@
 # https://www.uninformativ.de/git/katriawm/files.html
 #
 
+require 'bundler/setup'
 require 'X11'
 require 'set'
 
