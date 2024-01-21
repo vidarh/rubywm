@@ -106,3 +106,51 @@ manager last and let it end the X session when it quits, but since
 this is in development, I'm not going to do that because most stuff on
 my desktop can survive my WM crashing and being restarted just fine,
 as it should be, but will obviously get killed if the X session dies.
+
+## Using with sxhkd
+
+This is my related integration with sxhkd from my sxhkd config, but any
+app that supports sending XClientMessage events can work:
+
+```
+    # Full screen
+    super + f
+    	/home/vidarh/bin/xclimsg -mpw focused _NET_WM_STATE 2 _NET_WM_STATE_FULLSCREEN 0 2
+    
+    # Shift Focus
+    super + {Left,Down,Up,Right}
+    	/home/vidarh/bin/xclimsg -mpw focused _RWM_FOCUS {Left,Down,Up,Right}
+    
+    # Shift direction
+    super + shift + d
+    	/home/vidarh/bin/xclimsg -mpw focused _RWM_SHIFT_DIRECTION 0
+    
+    # Swap node layout
+    super + shift + l
+    	/home/vidarh/bin/xclimsg -mpw focused _RWM_SWAP_NODES 0
+    
+    # Move
+    super + shift + {Left,Down,Up,Right}
+    	/home/vidarh/bin/xclimsg -mpw focused _RWM_MOVE {Left,Down,Up,Right}
+    
+    super + F1
+    	/home/vidarh/bin/xclimsg -mpw focused _NET_RESTACK_WINDOW 2 0 0
+    
+    super + F2
+    	/home/vidarh/bin/xclimsg -mpw focused _NET_RESTACK_WINDOW 2 0 1
+    
+    # Focus desktop
+    super + {1-9,0}
+    	/home/vidarh/bin/xclimsg -mp _NET_CURRENT_DESKTOP {0-8,9}
+    
+    # Move to desktop
+    super + shift + {1-9,0}
+    	/home/vidarh/bin/xclimsg -mpw focused _NET_WM_DESKTOP {0-8,9}
+```
+
+The `_RWM` events are custom for this WM. The others works on other
+EWMH compatible wms.
+
+xclimsg is from https://github.com/phillbush/xclimsg
+I intend to "build in" the same client code in rubywm to avoid that
+external dependency. Alternatively you can e.g. use xdotool or similar
