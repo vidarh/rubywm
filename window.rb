@@ -46,6 +46,8 @@ class Window < X11::Window
 
   def hidden_offset = @hidden && @desktop ? HIDDEN_OFFSET : 0
 
+  def layout_leaf = @desktop&.layout.find(self)
+    
   # FIXME: This should be an explicit flag, because as it is
   # here we can't make a floating window on a tiling desktop.
   def floating? = @desktop&.layout.nil? || @floating
@@ -121,7 +123,12 @@ class Window < X11::Window
     configure(x: geom.x + hidden_offset, y: geom.y, width: geom.width, height: geom.height, **args)
   end
 
-  
+  def set_border(col, w=1)
+    return configure(border_width: 0) if special?
+    configure(border_width: w)
+    change_attributes(values: {X11::Form::CWBorderPixel => col})
+  end
+
   def toggle_maximize
     return if special?
     rootgeom = @wm.rootgeom

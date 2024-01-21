@@ -25,32 +25,33 @@ class Node
   end
 
   def keep(k)
-    p [:keep, @node]
     @nodes = @nodes.map { |n| n.keep(k) }.compact
     @nodes.each {|n| n.parent = self }
     @nodes.length <= 1 ? @nodes.first : self
   end
 
-  def place_adjacent(window, leaf, dir)
+  def append(window) = @nodes << Leaf.new(window, parent: self)
+    
+  def place_adjacent(window, focus, dir)
     if nodes.length == 2
-      i = nodes.index(leaf)
+      i = nodes.index(focus)
       dir ||= Node.swapdir(@dir)
-      @nodes[i] = Node.new([leaf, Leaf.new(window)], parent: self, dir: dir)
+      @nodes[i] = Node.new([focus, Leaf.new(window)], parent: self, dir: dir)
     else
       @dir = dir if dir
-      @nodes << Leaf.new(window, parent: node)
+      append(window)
     end
   end
-  
+
+  def split(i)
+    @nodes[i] = Node.new(@nodes[i], parent: self) if @nodes[i].is_a?(Leaf)
+    @nodes[i]
+  end
+      
   def place(window)
     case @nodes.length
-    when 0..1
-      @nodes << Leaf.new(window, parent: self)
-    when 2
-      if @nodes[1].is_a?(Leaf)
-        @nodes[1] = Node.new(@nodes[1], parent: self)
-      end
-      @nodes[1].place(window)
+    when 0..1 then append(window)
+    when 2    then split(1).place(window)
     else raise
     end
   end

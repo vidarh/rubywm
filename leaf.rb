@@ -12,13 +12,32 @@ class Leaf
   def children = @window
   def placements = @iclass ? self : nil
 
+  def ancestors # FIXME this is misleading since it includes self.
+    acc = [self]
+    node = self
+    while node = node.parent
+      acc << node
+    end
+    acc
+  end
+  
   def keep(k)
-    # FIXME
-    return nil if !k.member?(window) && !@iclass
-    p [:keep, self]
-    self #return visible(window) ? self : nil
+    if !k.member?(window)
+      return nil if !@iclass
+      @window = nil
+    end
+    self
   end
 
+  def accept(w)
+    return false if @window
+    return false if @iclass &&
+      @iclass != w.wm_class.last &&
+      @iclass != w.wm_class.first
+    @window = w
+    return true
+  end
+  
   def layout(geom, ...) = window&.resize_to_geom(geom)
   def find(w) = (@window == w ? self : nil)
 end

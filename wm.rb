@@ -69,6 +69,8 @@ class WindowManager
   def current_desktop    = desktops[current_desktop_id] || desktops[0]
   def root_id            = (@root_id ||= @dpy.screens.first.root)
   def root               = (@root ||= X11::Window.new(@dpy, root_id))
+  def update = current_desktop&.update_layout
+        
   # FIXME: Does not take into account panels
   def rootgeom           = (@rootgeom ||= root.get_geometry)
   def window(wid)
@@ -128,12 +130,7 @@ class WindowManager
         return w
       end
 
-      if w.special?
-        w.configure(border_width: 0)
-      else
-        w.configure(border_width: 1)
-        w.change_attributes(values: {X11::Form::CWBorderPixel => @border_normal})
-      end
+      w.set_border(@border_normal)
 
       desktop = dpy.get_property(wid, :_NET_WM_DESKTOP, :cardinal)&.value
       desktop ||= current_desktop_id
@@ -213,11 +210,10 @@ class WindowManager
     # FIXME: This may be a bit brutal, in that it prevents keyboard control of the desktop or dock.
     return if w.special?
     
-    @focus&.change_attributes(values: {X11::Form::CWBorderPixel => @border_normal})
+    @focus&.set_border(@border_normal)
     @focus = w
     @focus.set_input_focus(:parent)
-    @focus.change_attributes(values: {X11::Form::CWBorderPixel => @border_focus})
-    p [:set_focus, wid, @focus, :children]
+    @focus.set_border(@border_focus)
     change_property(:_NET_ACTIVE_WINDOW, :window, wid)
   end
 
@@ -346,38 +342,26 @@ class WindowManager
       else
         layout = current_desktop&.layout
         if layout
-          prev = layout.find(w)
-          node = prev.parent
-          while node #&& node != layout.root
-            # FIXME: This duplication infuriates me, but it's inherent
-            # in having meaningful names for left/right/top/bottom/x/y
-            # It'd go away if using array indices, but is it worth it?
-            if !lr.nil? && node.dir == :lr
-              dx = node.geom ? (((node.geom.width * node.ratio) + xdiff)/node.geom.width) - node.ratio : 0.0
-              if node.nodes[0] == prev && !lr
-                node.ratio += dx
-                lr = nil
-              elsif node.nodes[1] == prev
-                node.ratio += dx
-                lr = nil
+          ancestors = ->(first,dir,flag, &block) do
+            first&.ancestors&.each_cons(2) do |prev, node|
+              if node.dir == dir &&
+                ((node.nodes[0] == prev && !flag) ||
+                (node.nodes[1] == prev))
+                node.ratio += node.geom ? block.call(prev,node,flag) : 0.0
+                node.ratio = node.ratio.clamp(0.1,0.9)
+                return
               end
             end
-            if !tb.nil? && node.dir == :tb
-              dy = node.geom ? (((node.geom.height * node.ratio) + ydiff)/node.geom.height) - node.ratio : 0.0
-              if node.nodes[0] == prev && !tb
-                node.ratio += dy
-                tb = nil
-              elsif node.nodes[1] == prev
-                node.ratio += dy
-                tb = nil
-              end
-            end
-            node.ratio = node.ratio.clamp(0.1,0.9)
-            prev = node
-            node = node.parent
           end
-          p :RESIZE_DONE
-          layout.call
+
+          ancestors.call(w.layout_leaf,:lr,lr) do |prev, node, flag|
+            (((node.geom.width * node.ratio) + xdiff)/node.geom.width) - node.ratio
+          end
+
+          ancestors.call(w.layout_leaf, :tb, tb) do |prev,node, flag|
+            (((node.geom.height * node.ratio) + ydiff)/node.geom.height) - node.ratio
+          end
+          update
         end
       end
       @start.root_x = ev.root_x

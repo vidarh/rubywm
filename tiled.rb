@@ -21,17 +21,7 @@ class TiledLayout
   def cleanup = (@root = Node(@root.keep(windows)))
   def find(w) = @root.find(w)
 
-  def apply_placements(window)
-    @root.placements.each do |leaf|
-      if !leaf.window &&
-        (leaf.iclass == window.wm_class.last ||
-         leaf.iclass == window.wm_class.first)
-        leaf.window = window
-        return true
-      end
-    end
-    false
-  end
+  def apply_placements(window) = @root.placements.any? { _1.accept(window) }
   
   def place(window, focus=nil, dir=nil)
     return if apply_placements(window)
@@ -45,7 +35,6 @@ class TiledLayout
     new_windows = windows - @root.children
     cleanup
     new_windows.each { place(_1) }
-
     g = GAP/(1.3 ** @root.children.length)
     @root.layout(gap(@geom,g), g)
   end
