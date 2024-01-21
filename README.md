@@ -1,8 +1,6 @@
 
 # A Ruby X11 Window Manager
 
-(Name suggestions welcome)
-
 **WARNING**:
 
 This is experimental. It will eat your cat and burn down your house,
@@ -13,7 +11,8 @@ Also it *will* likely crash on you.
 If you're not comfortable figuring out how to recover from an X session
 where your window manager is gone and lots of your windows appears to have
 disappeared ... somewhere, and you might not be able to get focus to a
-terminal window, this is not yet for you.
+terminal window without switching to the text console, this is not yet
+for you.
 
 ## So why should I run this?
 
@@ -29,12 +28,16 @@ there is *no window decoration* and windows are not draggable or
 resizable by pulling on borders (but you can do that with Windows
 key + left/right mouse button)
 
-Like bspwm, which was an inspiration, supports *no* keyboard
+Like bspwm, which was an inspiration, the wm supports *no* keyboard
 handling - all keyboard handling is deferred to separate tools like
 sxhkd. Unlike bspwm this WM has no dedicated IPC mechanism. Instead,
 so far, all communication happens via X11 ClientMessage events, which
 means any tool, like xdotool etc. that can produce those events can
 control the WM.
+
+It currently does *not* do anything to facilitate working on multiple
+monitors, as in my current setup I'm only using a single monitor for
+my Linux machine.
 
 ## Why did you write this?
 
