@@ -13,14 +13,12 @@ class Node
     @geom = nil # *current* geometry, subject to change at all time
   end
 
-  # FIXME: Restate children, placements, find in terms of
-  # an "each_child"
   def children   = @nodes.map(&:children).flatten.compact
   def placements = @nodes.map(&:placements).flatten.compact
 
   def find(w)
-    @nodes.each do |node|
-      n = node.find(w)
+    @nodes.each do
+      n = _1.find(w)
       return n if n
     end
     nil
@@ -34,13 +32,15 @@ class Node
   end
 
   def place(window)
-    if @nodes.length < 2
+    case @nodes.length
+    when 0..1
       @nodes << Leaf.new(window, parent: self)
-    else
+    when 2
       if @nodes[1].is_a?(Leaf)
         @nodes[1] = Node.new(@nodes[1], parent: self)
       end
       @nodes[1].place(window)
+    else raise
     end
   end
 
