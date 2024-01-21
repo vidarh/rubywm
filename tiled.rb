@@ -37,21 +37,7 @@ class TiledLayout
     return if apply_placements(window)
     return @root.place(window) if !focus
     leaf = self.find(focus)
-    return @root.place(window) if !leaf
-    node = leaf.parent
-    l = Leaf.new(window)
-    # FIXME: Move this to Node class.
-    if node.nodes.length == 2
-      i = node.nodes.index(leaf)
-      dir ||= Node.swapdir(node.dir)
-      new_node = Node.new([leaf, l], parent: node, dir: dir)
-      l.parent = new_node
-      node.nodes[i] = new_node
-    else
-      l.parent = node
-      node.dir = dir if dir
-      node.nodes << l
-    end
+    leaf&.parent&.place_adjacent(window, leaf, dir) || @root.place(window)
     call
   end
   

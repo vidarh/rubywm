@@ -31,6 +31,17 @@ class Node
     @nodes.length <= 1 ? @nodes.first : self
   end
 
+  def place_adjacent(window, leaf, dir)
+    if nodes.length == 2
+      i = nodes.index(leaf)
+      dir ||= Node.swapdir(@dir)
+      @nodes[i] = Node.new([leaf, Leaf.new(window)], parent: self, dir: dir)
+    else
+      @dir = dir if dir
+      @nodes << Leaf.new(window, parent: node)
+    end
+  end
+  
   def place(window)
     case @nodes.length
     when 0..1
