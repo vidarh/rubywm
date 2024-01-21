@@ -1,5 +1,16 @@
-class TypeDispatcher
-  def initialize(target)
+# # Dispatcher
+#
+# Dispatch `call(method, *args)` to `@target.on_<name>(*args)` or `@on[method].call(*args)`
+# where <name> is a cleaned up string representation of method, so that:
+#
+#   dispatch.(X11::Form::MotionNotify, arg1, arg2)
+#
+# Becomes:
+#
+#   @target.on_motion_notify(arg1, arg2)
+#
+class Dispatcher
+  def initialize(target=nil)
     @target = target
     @on = {}
   end
