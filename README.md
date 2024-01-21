@@ -99,7 +99,7 @@ see if it works for you:
     wait
     sleep 5
   done
-``
+```
 
 For most "normal" window managers, people tend to start the window
 manager last and let it end the X session when it quits, but since
