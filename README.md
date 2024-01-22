@@ -39,6 +39,15 @@ It currently does *not* do anything to facilitate working on multiple
 monitors, as in my current setup I'm only using a single monitor for
 my Linux machine.
 
+## Screenshots
+
+Note that most of what you see here is not the wm. The wm decoration is minimalist: a 1 pixel rectangular frame. Nothing else. But people want to see screenshots anyway, so here:
+
+<div>
+<a href="https://github.com/vidarh/rubywm/blob/8eed458c1b9f9d25372df3932ab1237149bb90c0/screenshots/2024-01-11_19-45.png?raw=true"><img style="display: inline; width: 48%" src="https://github.com/vidarh/rubywm/blob/8eed458c1b9f9d25372df3932ab1237149bb90c0/screenshots/2024-01-11_19-45.png?raw=true"></a>
+<a href="https://github.com/vidarh/rubywm/blob/master/screenshots/2024-01-11_20-04.png?raw=true"><img style="display: inline; width: 48%" src="https://github.com/vidarh/rubywm/blob/master/screenshots/2024-01-11_20-04.png?raw=true"></a>
+</div>
+
 ## Why did you write this?
 
 It started with mild frustration that bspwm handled my desire for one of
