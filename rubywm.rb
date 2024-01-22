@@ -22,6 +22,12 @@ require_relative 'node.rb'
 
 Thread.abort_on_exception = true
 
+if ARGV.shift == "--debug"
+  Thread.new do
+    binding.irb
+  end
+end
+
 dpy = X11::Display.new
 $wm = WindowManager.new(dpy, num_desktops: 10)
 
