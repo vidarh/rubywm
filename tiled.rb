@@ -27,14 +27,18 @@ class TiledLayout
     return if apply_placements(window)
     return @root.place(window) if !focus
     leaf = self.find(focus)
-    leaf&.parent&.place_adjacent(window, leaf, dir) || @root.place(window)
+    if leaf && leaf.parent
+      leaf.parent.place_adjacent(window, leaf, dir)
+    else @root.place(window)
+    end
     call
+    true
   end
   
-  def call
+  def call(focus=nil)
     new_windows = windows - @root.children
     cleanup
-    new_windows.each { place(_1) }
+    new_windows.each { place(_1,focus) }
     g = GAP/(1.3 ** @root.children.length)
     @root.layout(gap(@geom,g), g)
   end

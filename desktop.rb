@@ -1,4 +1,5 @@
 
+
 class Desktop
   attr_accessor :name, :id, :wm, :layout, :window
 
@@ -9,7 +10,7 @@ class Desktop
   def show     = children.each(&:show)
   def hide     = children.each(&:hide)
   def inspect  = "<Desktop id=#{id} window=#{@window}>"
-  def update_layout = (layout&.call if active?)
+  def update_layout = (layout&.call(@wm.focus) if active?)
 end
 
 

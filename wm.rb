@@ -1,4 +1,6 @@
 
+require_relative 'floating'
+
 class WindowManager
   attr_reader :dpy, :desktops, :windows, :focus
 
@@ -11,6 +13,8 @@ class WindowManager
     @border_normal = 0x88666666
     @border_focus  = 0xffff66ff
 
+    @floating = FloatingLayout.new(rootgeom)
+    
     @desktops ||= num_desktops.times.map do |num|
       Desktop.new(self, num, name: (num+1).to_s[-1])
     end
@@ -69,8 +73,10 @@ class WindowManager
   def current_desktop    = desktops[current_desktop_id] || desktops[0]
   def root_id            = (@root_id ||= @dpy.screens.first.root)
   def root               = (@root ||= X11::Window.new(@dpy, root_id))
-  def update_layout = current_desktop&.update_layout
-        
+  def layout = current_desktop&.layout || @floating
+  def layout_for(w) = (w.floating? ? @floating : layout)
+  def update_layout = layout.call(@focus)
+
   # FIXME: Does not take into account panels
   def rootgeom           = (@rootgeom ||= root.get_geometry)
   def window(wid)
@@ -88,7 +94,6 @@ class WindowManager
     return w if w
     w = Window.new(self, wid)
     begin
-      STDERR.puts "\e[35madopt6\e[0m: #{wid.to_s(16)}; type=#{w.type.inspect}"
       # FIXME: At least some of these ought to "adopted" but set as
       # floating/non-layout so they stay on a single desktop.
       #
@@ -102,26 +107,18 @@ class WindowManager
          w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_SPLASH) ||
          w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_UTILITY)
         w.floating = true
-        p [:ignoring, w.inspect]
         w.stack
         return w
       end
       if w.desktop?
         w.floating = true
       end
-      STDERR.puts "\e[35madopt5\e[0m: #{wid.to_s(16)}"
       attr = w.get_window_attributes
-      if attr.wclass == 2 # InputOnly
-        # We don't want to adopt inputonly windows, as they're
-        # for event handling only
-        return w
-      end
+      return w if attr.wclass == 2 # InputOnly
       return w if attr.override_redirect
       w.mapped = attr.map_state != 0
       geom = w.get_geometry
-      return w if geom.is_a?(X11::Form::Error)
-
-      return w if geom.width < 2 || geom.height < 2
+      return w if geom.is_a?(X11::Form::Error) || geom.width < 2 || geom.height < 2
       @windows[wid] = w
 
       wms = w.get_property(:_NET_WM_STATE, :atom)&.value
@@ -152,23 +149,8 @@ class WindowManager
 
   def map_window(wid)
     w = window(wid)
-    attr = w.get_geometry
-    return if attr.is_a?(X11::Form::Error)
-    x = attr.x
-    y = attr.y
-    width  = attr.width
-    height = attr.height
-    width  = rootgeom.width / 2 if width < 10
-    height = rootgeom.height - 100 if height < 10
-        
     w.mapped = true
-    if w.floating?
-      x = (rootgeom.width  - width) /2 if x == 0
-      y = (rootgeom.height - height)/2 if y == 0
-      w.configure(x:, y:, width:, height:)
-    else
-      current_desktop.layout&.place(w, @focus)
-    end
+    layout_for(w).place(w, @focus) unless layout_for(w).find(w)
     w.map
     set_focus(wid) unless w.special?
   end
@@ -204,7 +186,6 @@ class WindowManager
   def set_focus(wid)
     return if wid == root_id
     w = window(wid)
-    p [:set_focus, wid, w]
     
     # FIXME: This may be a bit brutal, in that it prevents keyboard control of the desktop or dock.
     return if w.special?
@@ -214,52 +195,6 @@ class WindowManager
     @focus.set_input_focus(:parent)
     @focus.set_border(@border_focus)
     change_property(:_NET_ACTIVE_WINDOW, :window, wid)
-  end
-
-  # FIXME: This needs tweaks. Especially for floating windows, where
-  # what we really want is to e.g. treat partially overlapping windows
-  # so that the one closest to *overlapping* the correct border is picked
-  def find_closest(w, dir, from)
-    g = w.get_geometry
-
-    case dir
-    when :left  then predicate = ->(g2) { g.x  - (g2.x + g2.width)  }
-    when :right then predicate = ->(g2) { g2.x - (g.x  + g.width)   }
-    when :up    then predicate = ->(g2) { g.y  - (g2.y + g2.height) }
-    when :down  then predicate = ->(g2) { g2.y - (g.y  + g.height)  }
-    end
-
-    min = 10000
-    list = []
-    p [:here]
-    from.each do |win|
-      p [:checking, win, dir]
-      g2 = win.get_geometry rescue nil
-      next if g2.nil?
-      dist = predicate.call(g2).abs
-      if dist <= min
-        if dist == min
-          list << win
-        else
-          list = [win]
-          min = dist
-        end
-      end
-      p [dist, min, list]
-    end
-    p [min, list]
-    return nil if list.empty?
-    return list.first if list.length == 1
-
-    # More than one in the same direction,
-    # FIXME: For now we just pick the first.
-    # Ideally I'd probably want to request the pointer location
-    # and find the closest along the other axis.
-    # May also want to check which window had focus last,
-    # and track last direction, so that e.g. left->right->left
-    # will go back to the same window
-
-    return list.first
   end
 
   def destroy_window(wid)
@@ -308,7 +243,6 @@ class WindowManager
     rescue # FIXME: Why is this here?
     end
 
-    #p w
     if @start.detail == 1 # Move
       if w.floating?
         w.configure(x: @attr.x + xdiff, y: @attr.y + ydiff)
@@ -326,39 +260,33 @@ class WindowManager
         @attr.height = @attr.height+ (tb ? -ydiff : ydiff)
         w.configure(x: @attr.x, y: @attr.y, width: @attr.width, height: @attr.height)
       else
-        layout = current_desktop&.layout
-        if layout
-          ancestors = ->(first,dir,flag, &block) do
-            first&.ancestors&.each_cons(2) do |prev, node|
-              if node.dir == dir &&
-                ((node.nodes[0] == prev && !flag) ||
-                (node.nodes[1] == prev))
-                node.ratio += node.geom ? block.call(prev,node,flag) : 0.0
-                node.ratio = node.ratio.clamp(0.1,0.9)
-                return
-              end
+        ancestors = ->(first,dir,flag, &block) do
+          first&.ancestors&.each_cons(2) do |prev, node|
+            if node.dir == dir &&
+              ((node.nodes[0] == prev && !flag) ||
+              (node.nodes[1] == prev))
+              node.ratio += node.geom ? block.call(prev,node,flag) : 0.0
+              node.ratio = node.ratio.clamp(0.1,0.9)
+              return
             end
           end
-
-          ancestors.call(w.layout_leaf,:lr,lr) do |prev, node, flag|
-            (((node.geom.width * node.ratio) + xdiff)/node.geom.width) - node.ratio
-          end
-
-          ancestors.call(w.layout_leaf, :tb, tb) do |prev,node, flag|
-            (((node.geom.height * node.ratio) + ydiff)/node.geom.height) - node.ratio
-          end
-          update_layout
         end
+
+        ancestors.call(w.layout_leaf,:lr,lr) do |prev, node, flag|
+          (((node.geom.width * node.ratio) + xdiff)/node.geom.width) - node.ratio
+        end
+          
+        ancestors.call(w.layout_leaf, :tb, tb) do |prev,node, flag|
+          (((node.geom.height * node.ratio) + ydiff)/node.geom.height) - node.ratio
+        end
+        update_layout
       end
       @start.root_x = ev.root_x
       @start.root_y = ev.root_y
     end
   end
 
-  def on_button_release(ev)
-    @start.child = nil if @start
-  end
-
+  def on_button_release(ev) = (@start.child = nil if @start)
   def on_focus_in(ev)       = focus || set_focus(ev.event)
   def on_enter_notify(ev)   = set_focus(ev.event)
   def on_unmap_notify(ev)   = window(ev.window)&.desktop&.update_layout
@@ -414,7 +342,6 @@ class WindowManager
     dir = dpy.get_atom_name(dir).downcase.to_sym
     return if !@focus || @focus.special?
     w = find_closest(@focus, dir, @focus.desktop.mapped_regular_children)
-
     set_focus(w.wid) if w
   end
 
@@ -422,8 +349,7 @@ class WindowManager
   def on_rwm_shift_direction(_,dir)
     # FIXME: Respect the window passed instead of doing it to @focus
     return if !@focus || @focus.special?
-    node = current_desktop&.layout&.find(@focus)
-    if node
+    if node = layout.find(@focus)
       node = node.parent if node.is_a?(Leaf)
       node.dir = node.dir == :lr ? :tb : :lr
       current_desktop&.update_layout
@@ -435,13 +361,13 @@ class WindowManager
     # FIXME: Respect the window passed instead of doing it to @focus
     # no matter what
     return if !@focus || @focus.special?
-    node = current_desktop&.layout&.find(@focus)
-    if node
+    # FIXME: Move to layout?
+    if node = layout.find(@focus)
       node = node.parent if node.is_a?(Leaf)
       tmp = node.nodes[0]
       node.nodes[0] = node.nodes[1]
       node.nodes[1] = tmp
-      current_desktop&.update_layout
+      update_layout
     end
   end
 

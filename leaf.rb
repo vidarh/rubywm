@@ -25,6 +25,8 @@ class Leaf
     if !k.member?(window)
       return nil if !@iclass
       @window = nil
+    else
+      k.delete(window)
     end
     self
   end
