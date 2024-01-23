@@ -69,7 +69,7 @@ class WindowManager
   def current_desktop    = desktops[current_desktop_id] || desktops[0]
   def root_id            = (@root_id ||= @dpy.screens.first.root)
   def root               = (@root ||= X11::Window.new(@dpy, root_id))
-  def update = current_desktop&.update_layout
+  def update_layout = current_desktop&.update_layout
         
   # FIXME: Does not take into account panels
   def rootgeom           = (@rootgeom ||= root.get_geometry)
@@ -186,14 +186,13 @@ class WindowManager
 
   def change_desktop(d)
     if current_desktop_id == d
-      # Allow using this as refresh, but reduce disruption
-      current_desktop.update_layout
+      update_layout
       return current_desktop.show
     end
     old = current_desktop
     @current_desktop_id = d
     current_desktop.show
-    current_desktop.update_layout
+    update_layout
     # FIXME: Switch focus (keep focus stack per desktop)
     old.hide
     change_property(:_NET_CURRENT_DESKTOP, :cardinal, d)
@@ -266,7 +265,7 @@ class WindowManager
   def destroy_window(wid)
     if w = @windows[wid]
       @windows.delete(wid)
-      current_desktop.update_layout
+      update_layout
       update_client_list
     end
   end
@@ -348,7 +347,7 @@ class WindowManager
           ancestors.call(w.layout_leaf, :tb, tb) do |prev,node, flag|
             (((node.geom.height * node.ratio) + ydiff)/node.geom.height) - node.ratio
           end
-          update
+          update_layout
         end
       end
       @start.root_x = ev.root_x
