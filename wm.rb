@@ -277,13 +277,8 @@ class WindowManager
 
   def on_map_notify(ev)      = (window(ev.window).mapped = true)
   def on_unmap_notify(ev)    = (window(ev.window).mapped = false)
-   # FIXME: Shouldn't most of these be dispatched to the *window*?
-
-  def on_map_request(ev) = map_window(ev.window)
-
-  def on_property_notify(ev)
-    p dpy.get_atom_name(ev.atom) rescue nil
-  end
+  def on_map_request(ev)     = map_window(ev.window)
+  def on_property_notify(ev) = (p dpy.get_atom_name(ev.atom) rescue nil)
 
   def on_button_press(ev)
     return if !ev.child
