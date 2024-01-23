@@ -1,4 +1,11 @@
 
+module X11
+  module Form
+    class Geometry
+      def inspect = "<Geometry x=#{x.to_i} y=#{y.to_i} width=#{width.to_i} height=#{height.to_i}>"
+    end
+  end
+end
 def gap(geom,g)
   geom = geom.dup
   geom.x += g
