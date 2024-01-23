@@ -275,17 +275,9 @@ class WindowManager
 
   def on_error(ev) = destroy_window(ev.bad_resource_id)
 
+  def on_map_notify(ev)      = (window(ev.window).mapped = true)
+  def on_unmap_notify(ev)    = (window(ev.window).mapped = false)
    # FIXME: Shouldn't most of these be dispatched to the *window*?
-  def on_map_notify(ev)
-    w = window(ev.window)
-    w.mapped = true
-    current_desktop.update_layout
-  end
-
-  def on_unmap_notify(ev)
-    window(ev.window).mapped = false
-    current_desktop.update_layout
-  end
 
   def on_map_request(ev) = map_window(ev.window)
 

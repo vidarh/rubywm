@@ -6,12 +6,8 @@ HIDDEN_OFFSET=10000
 MAX_WIDTH=1920
 
 class Window < X11::Window
-  attr_reader :desktop, :hidden
+  attr_reader :desktop, :hidden, :mapped
   attr_writer :floating
-
-  # We largely stay out of this, other than to keep
-  # it out of the layout
-  attr_accessor :mapped
 
   def eql?(other) = (wid == other&.wid)
   def ==(other) = eql?(other)
@@ -44,6 +40,11 @@ class Window < X11::Window
     (lower if desktop?) rescue nil
   end
 
+  def mapped=(state)
+    @mapped = state
+    desktop&.update_layout
+  end
+  
   def hidden_offset = @hidden && @desktop ? HIDDEN_OFFSET : 0
 
   def layout_leaf = @desktop&.layout.find(self)
