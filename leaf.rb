@@ -21,6 +21,7 @@ class Leaf
     acc
   end
   
+
   def keep(k)
     if !k.member?(window)
       return nil if !@iclass

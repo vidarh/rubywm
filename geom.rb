@@ -37,7 +37,7 @@ def split_geom(geom, dir, node, gap, ratio)
       geom.y += th + gap
     end
     return geom
-  else raise "Invalid direction"
+  else raise "Invalid direction #{dir.inspect}"
   end
 end
 
