@@ -1,0 +1,18 @@
+
+# Default layout is tiled.
+# Desktops are numbered from 1, matching user-visible labelling rather than
+# the internal array.
+
+desktops:
+  number: 10 # Default
+
+  2:
+    nodes:
+    - iclass: "todo-todo"
+    - dir: tb
+      nodes: 
+      - iclass: "todo-done"
+      - iclass: "todo-note"
+  10:
+    layout: floating
+    

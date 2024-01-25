@@ -10,6 +10,7 @@
 require 'bundler/setup'
 require 'X11'
 require 'set'
+require 'yaml'
 
 require_relative 'window.rb'
 require_relative 'wm.rb'
@@ -28,8 +29,13 @@ if ARGV.shift == "--debug"
   end
 end
 
+# FIXME: This is only the first step towards splitting out config.
+# E.g. honor a config flag and/or XDG, but for now I'm just migrating
+# the config out of the WindowManager class.
+config = YAML.load_file(__dir__ + "/config.yml", symbolize_names: true)
+
 dpy = X11::Display.new
-$wm = WindowManager.new(dpy, num_desktops: 10)
+$wm = WindowManager.new(dpy, config)
 
 # FIXME: This can also go into the WindowManager class
 

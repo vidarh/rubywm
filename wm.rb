@@ -6,7 +6,7 @@ class WindowManager
 
   def inspect = "<WindowManager>"
 
-  def initialize dpy, num_desktops: 10
+  def initialize dpy, config
     @dpy = dpy
     @windows = {}
 
@@ -14,28 +14,10 @@ class WindowManager
     @border_focus  = 0xffff66ff
 
     @floating = FloatingLayout.new(rootgeom)
-    
-    @desktops ||= num_desktops.times.map do |num|
-      Desktop.new(self, num, name: (num+1).to_s[-1])
-    end
-    
-    # FIXME: Config
-    (0..8).each do |i|
-      desktops[i].layout = TiledLayout.new(desktops[i], rootgeom)
-    end
 
-    # FIXME: Config
-    # FIXME: Improved way of specifying pre-designed layouts.
-    r = desktops[1].layout.root
-    r.ratio = 0.5
-    r.nodes[0] = Leaf.new(iclass: "todo-todo")
-    r.nodes[1] = Node.new([
-      Leaf.new(iclass: "todo-done"),
-      Leaf.new(iclass: "todo-note")],
-      dir: :tb
-    )
-
-    change_property(:_NET_NUMBER_OF_DESKTOPS, :cardinal, num_desktops)
+    process_config(config)
+    
+    change_property(:_NET_NUMBER_OF_DESKTOPS, :cardinal, @desktops.count)
 
     mask = X11::Form::ButtonPressMask|X11::Form::ButtonReleaseMask|X11::Form::PointerMotionMask
     root.grab_button(true, mask, :async, :async, 0, 0, 1, X11::Form::Mod3)
@@ -64,6 +46,46 @@ class WindowManager
      change_desktop(current_desktop_id)
 
   end
+
+  def process_node_child(spec, n)
+    if spec[:type] != :node && !spec[:nodes]
+      return Leaf.new(iclass: spec[:iclass], parent: n)
+    end
+    cur = Node.new(parent: n)
+    process_node_config(cur, spec, n)
+    return cur
+  end
+
+  def process_node_config(n, spec, parent=nil)
+    n.ratio = spec[:ratio] if spec&.dig(:ratio)
+    n.dir = spec[:dir].to_sym if spec&.dig(:dir)
+    Array(spec&.dig(:nodes)).each do |sub|
+      n.nodes << process_node_child(sub, n)
+    end
+  end
+
+  # FIXME: I'm not particlarly happy about building this in.
+  # I prefer the bspwm approach of externalising it, because
+  # I need/want an API to change it dynamically anyway, so
+  # this is likely to change.
+  def process_config(config)
+    num_desktops = config.dig(:desktops, :number) || 10
+    @desktops ||= num_desktops.times.map do |num|
+      c = config.dig(:desktops, num+1)
+      name = c&.dig(:name) || (num+1).to_s
+      Desktop.new(self, num, name).tap do |d|
+        if c&.dig(:layout) == "floating"
+          # FIXME: Should be ok to set this to @floating
+          # but some logic checks for a nil layout
+          d.layout = nil
+        else
+          d.layout = TiledLayout.new(d, rootgeom)
+          process_node_config(d.layout.root,c)
+        end
+      end
+    end
+  end
+  
 
   def change_property(atom, type, data, mode: :replace, format: 32)
     root.change_property(mode, atom, type, format, Array(data).pack("V*").unpack("C*"))
