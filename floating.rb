@@ -1,8 +1,10 @@
 #
 # Apart from the very limited "place" the main purpose of this
 # class is to ensure there *always* is a layout
-#
-class FloatingLayout
+
+require_relative 'layout'
+
+class FloatingLayout < Layout
 
   def initialize(rootgeom)
     @rootgeom = rootgeom
@@ -23,6 +25,4 @@ class FloatingLayout
     y = (@rootgeom.height - height)/2 if y == 0
     w.configure(x:, y:, width:, height:)
   end
-
-  def call = nil
 end
