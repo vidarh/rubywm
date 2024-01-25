@@ -35,14 +35,11 @@ class Node
   end
     
   def place_adjacent(window, focus, dir)
-      l = (self.parent || self).find(window)
-      raise if l
     if nodes.length == 2
       i = nodes.index(focus) || 1
       dir ||= Node.swapdir(@dir) || :lr
       @nodes[i] = Node.new([focus, Leaf.new(window)], parent: self, dir: dir)
     else
-    #@dir ||= dir if dir
       append(window)
     end
   end
