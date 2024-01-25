@@ -110,8 +110,7 @@ class Window < X11::Window
          type == dpy.atom(:_NET_WM_WINDOW_TYPE_UTILITY)
   end
     
-  # FIXME: Account for border.
-  def maximize = resize_to_geom(@wm.rootgeom, stack_mode: :above)
+  def maximize = (set_border_width(0) and resize_to_geom(@wm.rootgeom, stack_mode: :above))
 
   def resize_to_geom(geom, **args)
     # FIXME: Need to figure out what to do about these
@@ -119,10 +118,11 @@ class Window < X11::Window
     configure(x: geom.x + hidden_offset, y: geom.y, width: geom.width, height: geom.height, **args)
   end
 
+  def set_border_width(w=1) = configure(border_width: special? ? 0 : w)
+    
   def set_border(col, w=1)
-    return configure(border_width: 0) if special?
-    configure(border_width: w)
-    change_attributes(values: {X11::Form::CWBorderPixel => col})
+    set_border_width(w)
+    change_attributes(values: {X11::Form::CWBorderPixel => col}) unless special?
   end
 
   def toggle_maximize
@@ -137,6 +137,7 @@ class Window < X11::Window
       geom.width  == rootgeom.width &&
       geom.height == rootgeom.height
       resize_to_geom(og)
+      set_border_width
     else
       # If maximized, and we know the old size, we revert the size.
       @old_geom = get_geometry # This is wasteful
