@@ -46,11 +46,7 @@ class Window < X11::Window
   end
   
   def hidden_offset = @hidden && @desktop ? HIDDEN_OFFSET : 0
-
   def layout_leaf = @desktop&.layout.find(self)
-    
-  # FIXME: This should be an explicit flag, because as it is
-  # here we can't make a floating window on a tiling desktop.
   def floating? = @desktop&.layout.nil? || @floating
 
   def hide
@@ -93,8 +89,7 @@ class Window < X11::Window
   end
 
   def wm_class = (@wm_class ||= get_property(:WM_CLASS, :STRING)&.value.to_s.split("\0"))
-  def type = (@type ||= get_property(:_NET_WM_WINDOW_TYPE, :atom)&.value.to_i)
-
+  def type     = (@type ||= get_property(:_NET_WM_WINDOW_TYPE, :atom)&.value.to_i)
   def desktop? = (type == dpy.atom(:_NET_WM_WINDOW_TYPE_DESKTOP))
   def dock?    = (type == dpy.atom(:_NET_WM_WINDOW_TYPE_DOCK))
   def special? = (desktop? | dock?)
@@ -103,7 +98,7 @@ class Window < X11::Window
   def lower =  configure(stack_mode: :below)
   def raise = (configure(stack_mode: :above) unless desktop?)
 
-  # Adjust stacking based on type. This in incomplete
+  # Adjust stacking based on type. This is incomplete
   def stack
     return lower if desktop?
     # FIXME: This is incomplete. Also may want to add a separate
