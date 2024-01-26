@@ -57,5 +57,9 @@ loop do
   end
 
   p ev
-  d.(ev.class, ev)
+  begin
+    d.(ev.class, ev)
+  rescue X11::Error => e
+    pp e
+  end
 end

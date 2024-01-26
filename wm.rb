@@ -115,56 +115,51 @@ class WindowManager
     w = @windows[wid] # To avoid infinite recursion, this *must not* use #window
     return w if w
     w = Window.new(self, wid)
-    begin
-      # FIXME: At least some of these ought to "adopted" but set as
-      # floating/non-layout so they stay on a single desktop.
-      #
-      if w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_POPUP) ||
-         w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_NOTIFICATION) ||
-         w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_POPUP_MENU) ||
-         w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_MENU) ||
-         w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_DOCK) ||
-         w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_TOOLTIP) ||
-         w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_DIALOG) ||
-         w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_SPLASH) ||
-         w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_UTILITY)
-        w.floating = true
-        w.stack
-        return w
-      end
-      if w.desktop?
-        w.floating = true
-      end
-      attr = w.get_window_attributes
-      return w if attr.wclass == 2 # InputOnly
-      return w if attr.override_redirect
-      w.mapped = attr.map_state != 0
-      geom = w.get_geometry
-      return w if geom.is_a?(X11::Form::Error) || geom.width < 2 || geom.height < 2
-      @windows[wid] = w
 
-      wms = w.get_property(:_NET_WM_STATE, :atom)&.value
-      if wms == dpy.atom(:_NET_WM_STATE_ABOVE)
-        # This seems like it's probably not a good idea.
-        return w
-      end
-
-      w.set_border(@border_normal)
-
-      desktop = dpy.get_property(wid, :_NET_WM_DESKTOP, :cardinal)&.value
-      desktop ||= current_desktop_id
-      move_to_desktop(wid, desktop)
-      w.select_input(
-        X11::Form::FocusChangeMask     |
-        X11::Form::PropertyChangeMask  |
-        X11::Form::EnterWindowMask     |
-        X11::Form::LeaveWindowMask
-      )
-    rescue Exception => e
-      p [:ZZZZZZZZZZZZZZZZZZZZZZZZZADOPT_FAILED, e]
-      # Failure here most likely reflects a window that has "disappeared".
-      # We should handle that better, but for now this is fine
+    # FIXME: At least some of these ought to "adopted" but set as
+    # floating/non-layout so they stay on a single desktop.
+    #
+    if w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_POPUP) ||
+      w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_NOTIFICATION) ||
+      w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_POPUP_MENU) ||
+      w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_MENU) ||
+      w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_DOCK) ||
+      w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_TOOLTIP) ||
+      w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_DIALOG) ||
+      w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_SPLASH) ||
+      w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_UTILITY)
+      w.floating = true
+      w.stack
+      return w
     end
+    if w.desktop?
+      w.floating = true
+    end
+    attr = w.get_window_attributes
+    return w if attr.wclass == 2 # InputOnly
+    return w if attr.override_redirect
+    w.mapped = attr.map_state != 0
+    geom = w.get_geometry
+    return w if geom.width < 2 || geom.height < 2
+    @windows[wid] = w
+
+    wms = w.get_property(:_NET_WM_STATE, :atom)&.value
+    if wms == dpy.atom(:_NET_WM_STATE_ABOVE)
+      # This seems like it's probably not a good idea.
+      return w
+    end
+
+    w.set_border(@border_normal)
+
+    desktop = dpy.get_property(wid, :_NET_WM_DESKTOP, :cardinal)&.value
+    desktop ||= current_desktop_id
+    move_to_desktop(wid, desktop)
+    w.select_input(
+      X11::Form::FocusChangeMask     |
+      X11::Form::PropertyChangeMask  |
+      X11::Form::EnterWindowMask     |
+      X11::Form::LeaveWindowMask
+    )
     update_client_list
     return w
   end
