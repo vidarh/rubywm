@@ -234,19 +234,15 @@ class WindowManager
   def on_button_press(ev)
     return if !ev.child
     w = window(ev.child)
-    @attr = w.get_geometry rescue nil
-    if @attr
-      set_focus(w.wid)
-      @start = ev
-    end
+    @attr = w.get_geometry
+    set_focus(w.wid)
+    @start = ev
   end
 
   def on_motion_notify(ev)
     # @start.button == 1 -> move
     # @start.button == 3 -> resize
-    if ev.child != @start.child
-      set_focus(ev.child) rescue nil # FIXME
-    end
+    set_focus(ev.child) if ev.child != @start.child
     return if !@start&.child || !@attr
 
     xdiff = ev.root_x - @start.root_x;
@@ -255,10 +251,7 @@ class WindowManager
     w = window(@start.child)
 
     # FIXME: Any other types we don't want to allow moving or resizing
-    begin
-      return if w.special?
-    rescue # FIXME: Why is this here?
-    end
+    return if w.special?
 
     if @start.detail == 1 # Move
       if w.floating?
@@ -397,10 +390,8 @@ class WindowManager
     dir = dpy.get_atom_name(dir).downcase.to_sym
 
     if @focus.floating?
-      # FIXME:
-      # Move stepwise instead.
-      g = @focus.get_geometry rescue nil
-      return if g.nil?
+      g = @focus.get_geometry
+
       case dir
       when :left  then @focus.configure(x: g.x - 20)
       when :right then @focus.configure(x: g.x + 20)

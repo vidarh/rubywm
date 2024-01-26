@@ -17,7 +17,7 @@ class Window < X11::Window
     @wm = wm
     self.desktop = desktop
     @hidden = false
-    @realgeom = get_geometry rescue nil
+    @realgeom = get_geometry
     @floating = floating
 
     # This is a "safety" workaround
@@ -37,7 +37,7 @@ class Window < X11::Window
       resize_to_geom(@realgeom)
     end
 
-    (lower if desktop?) rescue nil
+    lower if desktop?
   end
 
   def mapped=(state)
@@ -52,8 +52,8 @@ class Window < X11::Window
   def hide
     return if @hidden
     @hidden=true
-    @realgeom = get_geometry rescue nil
-    resize_to_geom(@realgeom) if @realgeom
+    @realgeom = get_geometry
+    resize_to_geom(@realgeom)
   end
 
   def show
@@ -129,8 +129,7 @@ class Window < X11::Window
     return if special?
     rootgeom = @wm.rootgeom
 
-    geom = get_geometry rescue nil
-    return if geom.nil?
+    geom = get_geometry
 
     if (og = @old_geom) &&
       geom.x == 0 && geom.y == 0 &&
