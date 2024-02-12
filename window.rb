@@ -88,7 +88,7 @@ class Window < X11::Window
     "<Window wid=#{@wid.to_s(16)} desktop=#{d} type=#{t} mapped=#{@mapped}>"
   end
 
-  def wm_class = (@wm_class ||= get_property(:WM_CLASS, :STRING)&.value.to_s.split("\0"))
+  def wm_class = get_property(:WM_CLASS, :STRING)&.value.to_s.split("\0")
   def type     = (@type ||= get_property(:_NET_WM_WINDOW_TYPE, :atom)&.value.to_i)
   def desktop? = (type == dpy.atom(:_NET_WM_WINDOW_TYPE_DESKTOP))
   def dock?    = (type == dpy.atom(:_NET_WM_WINDOW_TYPE_DOCK))
