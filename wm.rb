@@ -212,19 +212,19 @@ class WindowManager
     with_window(wid) do |w|
       w = window(wid)
     
-    # FIXME: This may be a bit brutal, in that it prevents keyboard control of the desktop or dock.
-    return if w.special?
+      # FIXME: This may be a bit brutal, in that it prevents keyboard control of the desktop or dock.
+      return if w.special?
     
-    @focus&.set_border(@border_normal)
-    @focus = w
-    @focus.set_input_focus(:parent)
-    @focus.set_border(@border_focus)
-    change_property(:_NET_ACTIVE_WINDOW, :window, wid)
+      @focus&.set_border(@border_normal)
+      @focus = w
+      @focus.set_input_focus(:parent)
+      @focus.set_border(@border_focus)
+      change_property(:_NET_ACTIVE_WINDOW, :window, wid)
     end
   end
 
   def destroy_window(wid)
-    if w = @windows[wid]
+    if @windows[wid]
       @windows.delete(wid)
       update_layout
       update_client_list
