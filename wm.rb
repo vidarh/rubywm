@@ -106,6 +106,11 @@ class WindowManager
     return @windows[wid] if @windows[wid]
     adopt(wid)
   end
+
+  def with_window(wid)
+    w = window(wid)
+    yield(w) if w
+  end
   
   def update_client_list = change_property(:_NET_CLIENT_LIST, :window, @windows.keys)
 
@@ -135,7 +140,8 @@ class WindowManager
     if w.desktop?
       w.floating = true
     end
-    attr = w.get_window_attributes
+    attr = w.get_window_attributes rescue nil
+    return w if !attr
     return w if attr.wclass == 2 # InputOnly
     return w if attr.override_redirect
     w.mapped = attr.map_state != 0
@@ -165,11 +171,12 @@ class WindowManager
   end
 
   def map_window(wid)
-    w = window(wid)
-    w.mapped = true
-    layout_for(w).place(w, @focus) unless layout_for(w).find(w)
-    w.map
-    set_focus(wid) unless w.special?
+    with_window(wid) do |w|
+      w.mapped = true
+      layout_for(w).place(w, @focus) unless layout_for(w).find(w)
+      w.map
+      set_focus(wid) unless w.special?
+    end
   end
 
   def move_to_desktop(wid,desktop)
@@ -202,7 +209,8 @@ class WindowManager
 
   def set_focus(wid)
     return if wid == root_id
-    w = window(wid)
+    with_window(wid) do |w|
+      w = window(wid)
     
     # FIXME: This may be a bit brutal, in that it prevents keyboard control of the desktop or dock.
     return if w.special?
@@ -212,6 +220,7 @@ class WindowManager
     @focus.set_input_focus(:parent)
     @focus.set_border(@border_focus)
     change_property(:_NET_ACTIVE_WINDOW, :window, wid)
+    end
   end
 
   def destroy_window(wid)
