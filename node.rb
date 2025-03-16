@@ -13,8 +13,8 @@ class Node
     @geom = nil # *current* geometry, subject to change at all time
   end
 
-  def children   = @nodes.map(&:children).flatten.compact
-  def placements = @nodes.map(&:placements).flatten.compact
+  def children   = @nodes.flat_map(&:children).compact
+  def placements = @nodes.flat_map(&:placements).compact
 
   def find(w)
     @nodes.each do
@@ -25,7 +25,7 @@ class Node
   end
 
   def keep(k)
-    @nodes = @nodes.map { |n| n.keep(k) }.compact
+    @nodes = @nodes.filter_map { _1.keep(k) }
     @nodes.each {|n| n.parent = self }
     @nodes.length <= 1 ? @nodes.first : self
   end
