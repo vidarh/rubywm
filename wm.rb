@@ -235,8 +235,8 @@ class WindowManager
 
   def on_error(ev) = destroy_window(ev.bad_resource_id)
 
-  def on_map_notify(ev)      = (window(ev.window).mapped = true)
-  def on_unmap_notify(ev)    = (window(ev.window).mapped = false)
+  def on_map_notify(ev)      = (window(ev.window)&.mapped = true)
+  def on_unmap_notify(ev)    = (window(ev.window)&.mapped = false)
   def on_map_request(ev)     = map_window(ev.window)
   def on_property_notify(ev) = (p dpy.get_atom_name(ev.atom) rescue nil)
 
@@ -331,13 +331,15 @@ class WindowManager
 
   def on_net_wm_state(wid, action, prop1, prop2, source)
     w = window(wid)
+    return if !w
+    
     p [:got_wm_state_for, w, prop1 == 0 ? "None" : dpy.get_atom_name(prop1),
       prop2 == 0 ? "None" : dpy.get_atom_name(prop2)]
     # FIXME: Need to check if "action" for toggle vs set/clear
     [prop1, prop2].each do |prop|
       case prop
       when dpy.atom(:_NET_WM_STATE_FULLSCREEN)
-        w.toggle_maximize
+        w&.toggle_maximize
       end
     end
     # For the time being, we recognize two things only:
