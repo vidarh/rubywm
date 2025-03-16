@@ -31,7 +31,7 @@ class WindowManager
        X11::Form::EnterWindowMask          |
        X11::Form::LeaveWindowMask          |
        X11::Form::ButtonPressMask          |
-#       X11::Form::ExposureMask             |
+       X11::Form::ExposureMask             |
        X11::Form::KeyPressMask             |
        X11::Form::FocusChangeMask
      )
