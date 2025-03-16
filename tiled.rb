@@ -31,17 +31,19 @@ class TiledLayout < Layout
     call
     true
   end
+
+  def relayout
+    g = GAP/(1.3 ** @root.children.length)
+    @root.layout(gap(@geom,g), g)
+  end
   
   def call(focus=nil)
     new_windows = windows - @root.children
     cleanup
     new_windows.each { place(_1,focus) }
-    g = GAP/(1.3 ** @root.children.length)
-    @root.layout(gap(@geom,g), g)
+    relayout
   end
 
-  private
-  
   def windows = @desktop.children.find_all{|w| w.mapped && !w.floating?}
   def cleanup = (@root = Node(@root.keep(windows)))
   def apply_placements(window) = @root.placements.any? { _1.accept(window) }
