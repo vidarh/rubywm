@@ -23,12 +23,6 @@ require_relative 'node.rb'
 
 Thread.abort_on_exception = true
 
-if ARGV.shift == "--debug"
-  Thread.new do
-    binding.irb
-  end
-end
-
 # FIXME: This is only the first step towards splitting out config.
 # E.g. honor a config flag and/or XDG, but for now I'm just migrating
 # the config out of the WindowManager class.
@@ -45,6 +39,21 @@ d.on(:client_message) do |ev|
   name = dpy.get_atom_name(ev.type)
   d.(name, ev.window, *data)
 end
+
+# FIXME: Proper arg parsing
+if ARGV.shift == "--drb"
+  STDERR.puts "Starting DRB"
+  require_relative './drb'
+  start_drb_service
+  gets
+end
+
+if ARGV.shift == "--debug"
+  Thread.new do
+    binding.irb
+  end
+end
+
 
 loop do
   ev = nil
