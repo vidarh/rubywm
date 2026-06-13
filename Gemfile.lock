@@ -1,0 +1,19 @@
+GIT
+  remote: https://github.com/vidarh/ruby-x11.git
+  revision: d5c069770dc34f873dcae9d9025adcdab3596be1
+  branch: master
+  specs:
+    pure-x11 (0.0.14)
+
+GEM
+  remote: https://rubygems.org/
+  specs:
+
+PLATFORMS
+  x86_64-linux
+
+DEPENDENCIES
+  pure-x11!
+
+BUNDLED WITH
+   2.4.19

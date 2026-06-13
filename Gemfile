@@ -2,5 +2,5 @@
 
 source "https://rubygems.org"
 
-gem "pure-x11", ">=0.0.9"
+gem "pure-x11", github: "vidarh/ruby-x11", branch: "master"
 
