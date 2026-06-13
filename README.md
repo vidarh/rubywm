@@ -110,6 +110,13 @@ see if it works for you:
   done
 ```
 
+### Command Line Options
+
+RubyWM supports these command line options:
+
+- `--drb`: Start with DRb service enabled for remote control
+- `--debug`: Open an IRB session for debugging
+
 For most "normal" window managers, people tend to start the window
 manager last and let it end the X session when it quits, but since
 this is in development, I'm not going to do that because most stuff on
