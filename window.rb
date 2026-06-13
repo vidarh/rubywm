@@ -89,7 +89,10 @@ class Window < X11::Window
   end
 
   def wm_class = get_property(:WM_CLASS, :STRING)&.value.to_s.split("\0")
-  def type     = (@type ||= get_property(:_NET_WM_WINDOW_TYPE, :atom)&.value.to_i)
+
+  # FIXME: This can be an Array, and we should handle that properly, but for now let's just be defensive.
+  def type     = (@type ||= Array(get_property(:_NET_WM_WINDOW_TYPE, :atom)&.value).first.to_i)
+
   def desktop? = (type == dpy.atom(:_NET_WM_WINDOW_TYPE_DESKTOP))
   def dock?    = (type == dpy.atom(:_NET_WM_WINDOW_TYPE_DOCK))
   def special? = (desktop? | dock?)

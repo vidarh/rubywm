@@ -333,20 +333,19 @@ class WindowManager
   def on_net_current_desktop(_, d) = change_desktop(d)
 
   def on_net_wm_state(wid, action, prop1, prop2, source)
-    w = window(wid)
-    return if !w
-    
-    p [:got_wm_state_for, w, prop1 == 0 ? "None" : dpy.get_atom_name(prop1),
+    with_window(wid) do |w|
+      p [:got_wm_state_for, w, prop1 == 0 ? "None" : dpy.get_atom_name(prop1),
       prop2 == 0 ? "None" : dpy.get_atom_name(prop2)]
-    # FIXME: Need to check if "action" for toggle vs set/clear
-    [prop1, prop2].each do |prop|
-      case prop
-      when dpy.atom(:_NET_WM_STATE_FULLSCREEN)
-        w&.toggle_maximize
+      # FIXME: Need to check if "action" for toggle vs set/clear
+      [prop1, prop2].each do |prop|
+        case prop
+        when dpy.atom(:_NET_WM_STATE_FULLSCREEN)
+          w&.toggle_maximize
+        end
       end
+      # For the time being, we recognize two things only:
+      # NET_WM_STATE_FULLSCREEN and NET_WM_STATE_MAXIMIZED_{VERT,HORZ}
     end
-    # For the time being, we recognize two things only:
-    # NET_WM_STATE_FULLSCREEN and NET_WM_STATE_MAXIMIZED_{VERT,HORZ}
   end
 
   # FIXME: This should be _NET_CLOSE_WINDOW
