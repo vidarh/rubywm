@@ -2,8 +2,6 @@
 # FIXME: 10000 pixels should be enough for anyone ...
 # Until it isn't.
 HIDDEN_OFFSET=10000
-# FIXME: Extract this from the real root width
-MAX_WIDTH=1920
 
 class Window < X11::Window
   attr_reader :desktop, :hidden, :mapped
@@ -23,18 +21,19 @@ class Window < X11::Window
     # This is a "safety" workaround
     # during development to avoid "losing" windows
 
-    if @realgeom && (@realgeom.x < 0 || @realgeom.x > MAX_WIDTH)
-      # First try to strip the offset.
+    if @realgeom
+      # Try to strip hidden offset if set
       if @realgeom.x >= HIDDEN_OFFSET
         @realgeom.x -= HIDDEN_OFFSET
       end
 
-      # OK, if still out of bounds, let's just give up finding
-      # the correct position.
-      if @realgeom.x > MAX_WIDTH || @realgeom.x < 0
+      # Check if window is outside any visible monitor
+      if !wm.monitor_for_point(@realgeom.x, @realgeom.y)
+        # If outside all monitors, place on primary monitor
         @realgeom.x = 0
+        @realgeom.y = 0
+        resize_to_geom(@realgeom)
       end
-      resize_to_geom(@realgeom)
     end
 
     lower if desktop?
@@ -59,7 +58,59 @@ class Window < X11::Window
   def show
     return if !@hidden
     @hidden = false
-    resize_to_geom(@realgeom) if @realgeom
+    begin
+      # If this is a floating window on a desktop with a monitor
+      if floating? && @desktop && (monitor = @desktop.monitor)
+        # Get the current geometry or use what we have saved
+        current_geom = get_geometry rescue nil
+        geom_to_use = current_geom || @realgeom
+
+        p [:geom_to_use, geom_to_use]
+        # FIXME: This moves the window more than necessary.
+        # Should only force the window into the monitors viewport.
+        if geom_to_use
+
+          while geom_to_use.x >= HIDDEN_OFFSET
+            geom_to_use.x -= HIDDEN_OFFSET
+          end
+
+          p [:adjusted_geom, geom_to_use]
+          win_monitor = @wm.monitor_for_point(geom_to_use.x, geom_to_use.y)
+
+          if !win_monitor
+            while geom_to_use.x >= monitor.xoffset + monitor.width
+              geom_to_use.x -= monitor.width
+            end
+
+            if geom_to_use.x < 0
+              geom_to_use.x = 0
+            end
+            win_monitor = @wm.monitor_for_point(geom_to_use.x, geom_to_use.y)
+          end
+
+          p [:win_monitor, win_monitor]
+          if win_monitor && monitor != win_monitor
+
+            xoff = monitor.xoffset - win_monitor.xoffset
+            yoff = monitor.yoffset - win_monitor.yoffset
+
+            # Create a new geometry with adjusted position
+            resized_geom = geom_to_use.dup
+            resized_geom.x += xoff
+            resized_geom.y += yoff
+            
+            @realgeom = resized_geom
+
+            p [:resized, @realgeom]
+          end
+        end
+      end
+      # Actually show the window with its geometry
+      resize_to_geom(@realgeom) if @realgeom
+    rescue X11::Error => e
+      # Window might be gone or invalid
+      pp [:error_showing_window, wid, e.message]
+    end
   end
 
   # We should rarely map a window ourselves, but if we do,
@@ -113,12 +164,20 @@ class Window < X11::Window
          type == dpy.atom(:_NET_WM_WINDOW_TYPE_UTILITY)
   end
     
-  def maximize = (set_border_width(0) and resize_to_geom(@wm.rootgeom, stack_mode: :above))
+  def maximize = (set_border_width(0) and resize_to_geom(desktop&.geometry || @wm.rootgeom, stack_mode: :above))
 
   def resize_to_geom(geom, **args)
-    # FIXME: Need to figure out what to do about these
-    return if geom == X11::Form::Error
-    configure(x: geom.x + hidden_offset, y: geom.y, width: geom.width, height: geom.height, **args)
+    # Skip if no geometry or invalid
+    return if geom.nil? || geom == X11::Form::Error
+
+    @realgeom = geom
+    
+    begin
+      configure(x: geom.x + hidden_offset, y: geom.y, width: geom.width, height: geom.height, **args)
+    rescue X11::Error => e
+      # Window might be gone or invalid
+      pp [:error_resizing_window, wid, e.message]
+    end
   end
 
   def set_border_width(w=1) = configure(border_width: special? ? 0 : w)
@@ -130,20 +189,23 @@ class Window < X11::Window
 
   def toggle_maximize
     return if special?
-    rootgeom = @wm.rootgeom
+    rootgeom = desktop&.geometry || @wm.rootgeom
 
     geom = get_geometry
 
-    if (og = @old_geom) &&
-      geom.x == 0 && geom.y == 0 &&
-      geom.width  == rootgeom.width &&
-      geom.height == rootgeom.height
-      resize_to_geom(og)
+    pp [@old_geom, geom]
+    
+    if @maximized == true
+      @maximized = false
+      @real_geom = @old_geom if @old_geom
+      resize_to_geom(@realgeom)
       set_border_width
+      desktop.update_layout
     else
       # If maximized, and we know the old size, we revert the size.
       @old_geom = get_geometry # This is wasteful
       maximize
+      @maximized = true
     end
   end
 end

@@ -69,10 +69,14 @@ class Node
     when 1
       g = geom.dup
       if level==0 && @nodes[0].is_a?(Leaf)
-        g.width -= 600
-        g.x = 300
+        # Scale the adjustment based on monitor width
+        width_reduction = (g.width * 0.3).to_i
+        x_offset = (g.width * 0.15).to_i
+        
+        g.width -= width_reduction
+        g.x += x_offset
       end
-      @nodes[0].layout(g, dir, level+1)
+      @nodes[0].layout(g, gap, nextdir, level+1)
     when 2
       @nodes[0].layout(split_geom(geom, dir, 0,gap, @ratio), gap, nextdir, level+1)
       @nodes[1].layout(split_geom(geom, dir, 1,gap, @ratio), gap, nextdir, level+1)

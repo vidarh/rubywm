@@ -1,5 +1,6 @@
 
 require_relative 'floating'
+require_relative 'monitor'
 
 class WindowManager
   attr_reader :dpy, :desktops, :windows, :focus
@@ -9,19 +10,18 @@ class WindowManager
   def initialize dpy, config
     @dpy = dpy
     @windows = {}
+    @monitors = []
 
     @border_normal = 0x88666666
     @border_focus  = 0xffff66ff
-
-    @floating = FloatingLayout.new(rootgeom)
 
     process_config(config)
     
     change_property(:_NET_NUMBER_OF_DESKTOPS, :cardinal, @desktops.count)
 
     mask = X11::Form::ButtonPressMask|X11::Form::ButtonReleaseMask|X11::Form::PointerMotionMask
-    root.grab_button(true, mask, :async, :async, 0, 0, 1, X11::Form::Mod3)
-    root.grab_button(true, mask, :async, :async, 0, 0, 3, X11::Form::Mod3)
+    root.grab_button(true, mask, :async, :async, 0, 0, 1, X11::Form::Mod2|X11::Form::Mod4)
+    root.grab_button(true, mask, :async, :async, 0, 0, 3, X11::Form::Mod2|X11::Form::Mod4)
     root.grab_button(true, mask, :async, :async, 0, 0, 1, X11::Form::Mod4)
     root.grab_button(true, mask, :async, :async, 0, 0, 3, X11::Form::Mod4)
 
@@ -43,10 +43,29 @@ class WindowManager
      children.each { |wid| window(wid) }
 
      desktops.each(&:hide)
-     change_desktop(current_desktop_id)
-
+     
+     # Then show only the active desktop for each monitor
+     @monitors.each do |monitor|
+       if desktop = monitor.active_desktop
+         desktop.show
+       end
+     end
+     
+     # Set current desktop ID property based on active monitor
+     if active_monitor&.active_desktop
+       set_current_desktop(active_monitor.active_desktop.id)
+     else
+       # Fallback to desktop 0 if no active desktop
+       change_desktop(0)
+     end
   end
 
+  def set_current_desktop(desktop)
+    @current_desktop_id = desktop
+    change_property(:_NET_CURRENT_DESKTOP, :cardinal, desktop)
+    change_property("_NET_CURRENT_DESKTOP_MONITOR_#{active_monitor.id}".to_sym, :cardinal, desktop)
+  end
+  
   def process_node_child(spec, n)
     if spec[:type] != :node && !spec[:nodes]
       return Leaf.new(iclass: spec[:iclass], parent: n)
@@ -64,23 +83,129 @@ class WindowManager
     end
   end
 
+  def process_monitors(config)
+    pp @dpy.xinerama_query_version
+    monitors = @dpy.xinerama_query_screens.screens
+    pp monitors
+
+    if monitors.empty?
+      # Create a default monitor using root geometry if none defined
+      geom = rootgeom
+      @primary_monitor = WM::Monitor.new(0, 
+                                    width: geom.width, 
+                                    height: geom.height, 
+                                    xoffset: 0, 
+                                    yoffset: 0)
+      @monitors = [@primary_monitor]
+    else
+      monitors.each_with_index do |screen, id|
+        monitor = WM::Monitor.new(id, 
+                             width: screen.width,
+                             height: screen.height,
+                             xoffset: screen.x_org,
+                             yoffset: screen.y_org)
+        @monitors[id] = monitor
+        
+        # First monitor in config becomes primary by default
+        @primary_monitor ||= monitor
+      end
+    end
+    pp @monitors
+  end
+  
+  # Find the monitor that contains a given point
+  def monitor_for_point(x, y)
+    @monitors.find do |monitor|
+      x >= monitor.xoffset && x < (monitor.xoffset + monitor.width) &&
+      y >= monitor.yoffset && y < (monitor.yoffset + monitor.height)
+    end
+  end
+  
+  # Get the current pointer position
+  def pointer_position
+    query = @dpy.query_pointer(root.wid)
+    return query.root_x, query.root_y
+  rescue X11::Error => e
+    pp [:error_getting_pointer_position, e.message]
+    return nil, nil
+  end
+  
+  # Get the monitor containing the mouse pointer
+  # Since query_pointer is not implemented, this will default to primary monitor
+  def active_monitor
+    x, y = pointer_position
+
+    if x.nil? || y.nil?
+      pp [:active_monitor, :no_position]
+      if @focus
+        monitor = monitor_for_window(@focus)
+        pp [:active_monitor, :focus, @focus, monitor]
+        return monitor
+      else
+        pp [:fallback_to_primary_monitor]
+        return @primary_monitor
+      end
+    end
+    
+    monitor = monitor_for_point(x,y)
+    pp [:active_monitor, :monitor_for_point, x, y]
+    return monitor
+  end
+  
+  # Find the monitor that contains a window (using center point)
+  def monitor_for_window(window)
+    geom = window.get_geometry
+      
+    return @primary_monitor if !geom || geom.is_a?(X11::Form::Error)
+      
+    # Get center point of window
+    center_x = geom.x + (geom.width / 2)
+    center_y = geom.y + (geom.height / 2)
+      
+    # Find monitor containing this point
+    monitor = monitor_for_point(center_x, center_y)
+      
+    # Always return a monitor - use primary if no matching monitor found
+    monitor || @primary_monitor
+  rescue X11::Error => e
+    # Window might be gone or invalid
+    pp [:error_finding_monitor_for_window, window.wid, e.message]
+    @primary_monitor
+  end
+
   # FIXME: I'm not particlarly happy about building this in.
   # I prefer the bspwm approach of externalising it, because
   # I need/want an API to change it dynamically anyway, so
   # this is likely to change.
   def process_config(config)
+    process_monitors(config)
+
+    # FIXME: Move to each monitor.
+    @floating = FloatingLayout.new(self, rootgeom)
+
     num_desktops = config.dig(:desktops, :number) || 10
     @desktops ||= num_desktops.times.map do |num|
       c = config.dig(:desktops, num+1)
       name = c&.dig(:name) || (num+1).to_s
       Desktop.new(self, num, name).tap do |d|
+
+        # FIXME: Check EWMH hints first.
+        # Associate desktop with monitor for per-monitor desktop support
+        # On startup, each monitor shows a different desktop in sequence
+        # (monitor 1 shows desktop 1, monitor 2 shows desktop 2, etc.)
+        if num < @monitors.size
+          monitor = @monitors[num]
+          monitor.active_desktop = d
+        end
+        
         if c&.dig(:layout) == "floating"
           # FIXME: Should be ok to set this to @floating
           # but some logic checks for a nil layout
           d.layout = nil
         else
-          d.layout = TiledLayout.new(d, rootgeom)
-          process_node_config(d.layout.root,c)
+          # Use monitor-specific geometry for the layout
+          d.layout = TiledLayout.new(d, d.geometry)
+          process_node_config(d.layout.root, c)
         end
       end
     end
@@ -94,10 +219,35 @@ class WindowManager
   def current_desktop_id = (@current_desktop_id ||= root.get_property(:_NET_CURRENT_DESKTOP, :cardinal)&.value.to_i)
   def current_desktop    = desktops[current_desktop_id] || desktops[0]
   def root_id            = (@root_id ||= @dpy.screens.first.root)
-  def root               = (@root ||= X11::Window.new(@dpy, root_id))
-  def layout = current_desktop&.layout || @floating
-  def layout_for(w) = (w.floating? ? @floating : layout)
-  def update_layout = layout.call(@focus)
+  def root               = (@root ||=Window.new(self, root_id))
+  def layout
+    $logger.warn("Calling wm.layout almost certainly means this code path is not multi-monitor safe. FIXME.")
+    $logger.warn("Code that calls this should be converted to find the actual layout for the given window")
+    $logger.warn(caller[0..9].inspect)
+    current_desktop&.layout || @floating
+  end
+  
+  def layout_for(w)
+    if w.floating?
+      # Ensure floating layout knows about the desktop
+      @floating.set_desktop(w.desktop) if w.desktop
+      return @floating
+    else
+      desktop = w.desktop
+      current_layout = layout
+      
+      # For tiled layout, make sure it's using current desktop's geometry
+      if current_layout.is_a?(TiledLayout) && desktop&.monitor
+        current_layout.update_geometry(desktop.geometry)
+      end
+      
+      return current_layout
+    end
+  end
+  
+  def update_layout
+    @monitors.each {|m| m.active_desktop&.layout&.call(@focus) }
+  end
 
   # FIXME: Does not take into account panels
   def rootgeom           = (@rootgeom ||= root.get_geometry)
@@ -158,7 +308,10 @@ class WindowManager
     w.set_border(@border_normal)
 
     desktop = dpy.get_property(wid, :_NET_WM_DESKTOP, :cardinal)&.value
-    desktop ||= current_desktop_id
+    if !desktop
+      monitor = active_monitor
+      desktop = monitor.active_desktop.id
+    end
     move_to_desktop(wid, desktop)
     w.select_input(
       X11::Form::FocusChangeMask     |
@@ -173,7 +326,31 @@ class WindowManager
   def map_window(wid)
     with_window(wid) do |w|
       w.mapped = true
-      layout_for(w).place(w, @focus) unless layout_for(w).find(w)
+      
+      # If the window is new, position it on appropriate monitor
+      if !layout_for(w).find(w)
+        monitor = active_monitor
+        desktop = active_monitor.active_desktop
+        
+        # Get the layout that will be used
+        win_layout = layout_for(w)
+        
+        # For tiled layout, force geometry update based on monitor
+        if !w.floating? && win_layout.is_a?(TiledLayout)
+          # Force the layout to use the current monitor's geometry
+          win_layout.update_geometry(desktop.geometry)
+        end
+        
+        # Associate floating layout with the desktop if needed
+        if w.floating?
+          @floating.set_desktop(nil) # Reset first
+          @floating.set_desktop(desktop)
+        end
+        
+        # Now place the window using the layout with updated monitor information
+        win_layout.place(w, @focus)
+      end
+      
       w.map
       set_focus(wid) unless w.special?
     end
@@ -184,25 +361,84 @@ class WindowManager
     d = desktops[desktop] || desktops[0]
     w = window(wid)
     old = w.desktop
+
+    return if old == d
+
+    if !w.floating?
+      old&.layout&.remove_window(w)
+    end
+
     w.desktop = d
+    
+    if d.active?
+      w.show
+      
+      # If moving to an active desktop, add to layout and update focus
+      if !w.floating? && d.layout
+        d.layout.place(w, @focus)
+      end
+    else
+      w.hide
+    end
+    
     d.update_layout if d.active?
-    old&.update_layout
-    d.active? ? w.show : w.hide
+    old.update_layout if old&.active?
   end
 
-  def change_desktop(d)
-    if current_desktop_id == d
+  def change_desktop(d) = change_desktop_on_monitor(active_monitor, d)
+    
+  def change_desktop_on_monitor(curr_monitor, d)
+    target_desktop = desktops[d] if !d.is_a?(Desktop)
+    return if !target_desktop
+    
+    current_monitor_desktop = curr_monitor.active_desktop
+    
+    # If we're already showing this desktop on current monitor, just update layout
+    if current_monitor_desktop&.id == d
       update_layout
-      return current_desktop.show
+      return current_monitor_desktop.show
     end
-    old = current_desktop
-    @current_desktop_id = d
-    current_desktop.show
+    
+    # Try to find if any other monitor is showing the target desktop
+    other_monitors_with_target = @monitors.select do |m| 
+      m != curr_monitor && 
+      m.active_desktop && 
+      m.active_desktop.id == target_desktop.id
+    end
+    
+    # Use the first one found if any
+    other_monitor = other_monitors_with_target.first
+    
+    current_monitor_desktop&.hide
+
+    # If the target monitor is shown on another monitor, swap that monitor to this
+    # monitors desktop
+    if other_monitor
+      current_monitor_desktop.monitor = nil
+      change_desktop_on_monitor(other_monitor, current_monitor_desktop.id)
+    end
+    
+    # Update desktop-monitor association
+    curr_monitor.active_desktop = target_desktop
+      
+    # Make sure layout geometry is updated 
+    if target_desktop.layout
+      target_desktop.layout.update_geometry(curr_monitor.geometry)
+    else
+      @floating.set_desktop(target_desktop)
+      @floating.update_geometry(curr_monitor.geometry)
+    end
+      
+    # Show the desktop
+    target_desktop.show
+
+    # FIXME: pass monitor id
+    set_current_desktop(d)
+    
     update_layout
-    # FIXME: Switch focus (keep focus stack per desktop)
-    old.hide
-    change_property(:_NET_CURRENT_DESKTOP, :cardinal, d)
-    f = current_desktop&.mapped_regular_children&.first
+    
+    # Set focus to first window if available
+    f = target_desktop&.mapped_regular_children&.first
     set_focus(f.wid) if f
   end
 
@@ -359,6 +595,29 @@ class WindowManager
   end
 
   # # RWM specific ClientMessages
+  
+
+  # Move window to the desktop shown on adjacent monitor
+  # Usage: xclimsg -mp _RWM_MOVE_TO_MONITOR <direction>
+  # Direction: "next" or "previous"
+  def on_rwm_move_to_monitor(_, direction_atom)
+    return unless @focus
+    
+    direction = dpy.get_atom_name(direction_atom).downcase.to_sym
+    return unless [:next, :previous].include?(direction)
+    
+    curr_index = @monitors.index(active_monitor)
+    return if curr_index.nil?
+
+    offset = direction == :next ? 1 : -1
+    target_monitor = @monitors[(curr_index + offset) % @monitors.size]
+    target_desktop = target_monitor.active_desktop
+    return unless target_desktop
+    
+    move_to_desktop(@focus.wid, target_desktop.id)
+    set_focus(@focus.wid)
+  end
+  
 
   # Move focus to the "nearest" window in `dir` direction
   def on_rwm_focus(_, dir)

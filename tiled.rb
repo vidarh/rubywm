@@ -11,11 +11,19 @@ class TiledLayout < Layout
   
   def initialize(desktop, geom)
     @desktop = desktop
+    update_geometry(geom)
+    @root = Node.new(dir: :lr)
+  end
+
+  def update_geometry(geom)
+    # FIXME: Only do this if geom is actually different from @geom
+
     @geom = geom.dup
     # FIXME: This is to account for a bar, but we shouldn't just assume
     # the height here
     @geom.height -= 30
-    @root = Node.new(dir: :lr)
+
+    relayout if @root&.children&.any?
   end
 
   def find(w) = @root.find(w)
@@ -38,6 +46,11 @@ class TiledLayout < Layout
   end
   
   def call(focus=nil)
+    current_geom = @desktop.geometry
+    if @geom.width != current_geom.width || @geom.height != current_geom.height
+      update_geometry(current_geom)
+    end
+
     new_windows = windows - @root.children
     cleanup
     new_windows.each { place(_1,focus) }
@@ -47,4 +60,18 @@ class TiledLayout < Layout
   def windows = @desktop.children.find_all{|w| w.mapped && !w.floating?}
   def cleanup = (@root = Node(@root.keep(windows)))
   def apply_placements(window) = @root.placements.any? { _1.accept(window) }
+  
+  # Explicitly remove a window from the layout
+  # This is useful when moving a window to another desktop/monitor
+  def remove_window(window)
+    leaf = find(window)
+    if leaf
+      leaf.window = nil
+      cleanup
+      relayout
+      true
+    else
+      false
+    end
+  end
 end

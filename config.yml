@@ -5,7 +5,7 @@
 
 desktops:
   number: 10 # Default
-
+  
   2:
     nodes:
     - iclass: "todo-todo"
@@ -15,4 +15,4 @@ desktops:
       - iclass: "todo-note"
   10:
     layout: floating
-    
+    desktop: true

@@ -35,9 +35,15 @@ so far, all communication happens via X11 ClientMessage events, which
 means any tool, like xdotool etc. that can produce those events can
 control the WM.
 
-It currently does *not* do anything to facilitate working on multiple
-monitors, as in my current setup I'm only using a single monitor for
-my Linux machine.
+It now has full support for multiple monitors using Xinerama. You can configure
+monitors in config.yml with their resolution and position. Key features include:
+
+- Each monitor displays a different desktop independently
+- Desktop switching only affects the current active monitor
+- If you switch to a desktop shown on another monitor, they swap
+- Windows scale appropriately when moved between monitors of different resolutions
+- New windows will be placed on the monitor containing the currently focused window
+- Easy window movement between monitors
 
 ## Screenshots
 
@@ -162,6 +168,18 @@ app that supports sending XClientMessage events can work:
     # Move to desktop
     super + shift + {1-9,0}
     	/home/vidarh/bin/xclimsg -mpw focused _NET_WM_DESKTOP {0-8,9}
+    
+    # Assign desktop to a specific monitor (example for monitor "left")
+    super + alt + 1
+        /home/vidarh/bin/xclimsg -mp _RWM_SET_MONITOR 0 left
+        
+    # Move window to desktop shown on next monitor
+    super + period
+        /home/vidarh/bin/xclimsg -mp _RWM_MOVE_TO_MONITOR next
+        
+    # Move window to desktop shown on previous monitor
+    super + comma
+        /home/vidarh/bin/xclimsg -mp _RWM_MOVE_TO_MONITOR previous
 ```
 
 The `_RWM` events are custom for this WM. The others works on other
