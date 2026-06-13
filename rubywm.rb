@@ -11,6 +11,7 @@ require 'bundler/setup'
 require 'X11'
 require 'set'
 require 'yaml'
+require 'logger'
 
 require_relative 'window.rb'
 require_relative 'wm.rb'
@@ -20,6 +21,20 @@ require_relative 'type_dispatcher'
 require_relative 'geom.rb'
 require_relative 'leaf.rb'
 require_relative 'node.rb'
+
+def severity_colorize(severity) = case severity
+  when "INFO"  then "\e[33m"
+  when "DEBUG" then "\e[34m"
+  when "WARN"  then "\e[35m"
+  when "ERROR" then "\e[32m"
+  else ""
+end
+
+$logger = Logger.new(STDERR)
+$logger.level = Logger::INFO
+$logger.formatter = proc do |severity, datetime, progname, msg|
+  "#{severity_colorize(severity)}#{severity}\e[0m \e[36m#{datetime.strftime("%m/%d %H:%M:%S")}\e[0m \e[1m#{msg}\e[0m\n"
+end
 
 Thread.abort_on_exception = true
 
@@ -37,6 +52,7 @@ d = Dispatcher.new($wm)
 d.on(:client_message) do |ev|
   data = ev.data.unpack("V*")
   name = dpy.get_atom_name(ev.type)
+  $logger.info("Client Message: #{name}(#{data.map(&:to_s).join(", ")})")
   d.(name, ev.window, *data)
 end
 
@@ -62,13 +78,14 @@ loop do
   rescue Interrupt
     raise
   rescue Exception => e
-    pp e
+    $logger.error(e.inspect)
+    next
   end
 
-  p ev
+  $logger.debug("Event: #{ev.inspect}")
   begin
     d.(ev.class, ev)
   rescue X11::Error => e
-    pp e
+    $logger.error(e.inspect)
   end
 end

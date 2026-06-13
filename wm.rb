@@ -238,7 +238,10 @@ class WindowManager
   def on_map_notify(ev)      = (window(ev.window)&.mapped = true)
   def on_unmap_notify(ev)    = (window(ev.window)&.mapped = false)
   def on_map_request(ev)     = map_window(ev.window)
-  def on_property_notify(ev) = (p dpy.get_atom_name(ev.atom) rescue nil)
+  def on_property_notify(ev)
+    name = dpy.get_atom_name(ev.atom) rescue nil
+    $logger.info("Property Notify: #{name}")
+  end
 
   def on_button_press(ev)
     return if !ev.child
