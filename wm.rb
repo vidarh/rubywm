@@ -83,10 +83,8 @@ class WindowManager
     end
   end
 
-  def process_monitors(config)
-    pp @dpy.xinerama_query_version
+  def process_monitors
     monitors = @dpy.xinerama_query_screens.screens
-    pp monitors
 
     if monitors.empty?
       # Create a default monitor using root geometry if none defined
@@ -110,7 +108,7 @@ class WindowManager
         @primary_monitor ||= monitor
       end
     end
-    pp @monitors
+    $logger.info("Monitors: #{@monitors.inspect}")
   end
   
   # Find the monitor that contains a given point
@@ -126,30 +124,20 @@ class WindowManager
     query = @dpy.query_pointer(root.wid)
     return query.root_x, query.root_y
   rescue X11::Error => e
-    pp [:error_getting_pointer_position, e.message]
+    $logger.debug { "error getting pointer position: #{e.message}" }
     return nil, nil
   end
-  
-  # Get the monitor containing the mouse pointer
-  # Since query_pointer is not implemented, this will default to primary monitor
+
+  # Get the monitor containing the mouse pointer, falling back to the focused
+  # window's monitor and then the primary monitor.
   def active_monitor
     x, y = pointer_position
 
     if x.nil? || y.nil?
-      pp [:active_monitor, :no_position]
-      if @focus
-        monitor = monitor_for_window(@focus)
-        pp [:active_monitor, :focus, @focus, monitor]
-        return monitor
-      else
-        pp [:fallback_to_primary_monitor]
-        return @primary_monitor
-      end
+      return @focus ? monitor_for_window(@focus) : @primary_monitor
     end
-    
-    monitor = monitor_for_point(x,y)
-    pp [:active_monitor, :monitor_for_point, x, y]
-    return monitor
+
+    monitor_for_point(x, y)
   end
   
   # Find the monitor that contains a window (using center point)
@@ -168,8 +156,7 @@ class WindowManager
     # Always return a monitor - use primary if no matching monitor found
     monitor || @primary_monitor
   rescue X11::Error => e
-    # Window might be gone or invalid
-    pp [:error_finding_monitor_for_window, window.wid, e.message]
+    $logger.debug { "error finding monitor for window #{window.wid}: #{e.message}" }
     @primary_monitor
   end
 
@@ -178,7 +165,7 @@ class WindowManager
   # I need/want an API to change it dynamically anyway, so
   # this is likely to change.
   def process_config(config)
-    process_monitors(config)
+    process_monitors
 
     # FIXME: Move to each monitor.
     @floating = FloatingLayout.new(self, rootgeom)
@@ -570,8 +557,6 @@ class WindowManager
 
   def on_net_wm_state(wid, action, prop1, prop2, source)
     with_window(wid) do |w|
-      p [:got_wm_state_for, w, prop1 == 0 ? "None" : dpy.get_atom_name(prop1),
-      prop2 == 0 ? "None" : dpy.get_atom_name(prop2)]
       # FIXME: Need to check if "action" for toggle vs set/clear
       [prop1, prop2].each do |prop|
         case prop

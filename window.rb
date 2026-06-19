@@ -65,16 +65,13 @@ class Window < X11::Window
         current_geom = get_geometry rescue nil
         geom_to_use = current_geom || @realgeom
 
-        p [:geom_to_use, geom_to_use]
         # FIXME: This moves the window more than necessary.
         # Should only force the window into the monitors viewport.
         if geom_to_use
-
           while geom_to_use.x >= HIDDEN_OFFSET
             geom_to_use.x -= HIDDEN_OFFSET
           end
 
-          p [:adjusted_geom, geom_to_use]
           win_monitor = @wm.monitor_for_point(geom_to_use.x, geom_to_use.y)
 
           if !win_monitor
@@ -88,9 +85,7 @@ class Window < X11::Window
             win_monitor = @wm.monitor_for_point(geom_to_use.x, geom_to_use.y)
           end
 
-          p [:win_monitor, win_monitor]
           if win_monitor && monitor != win_monitor
-
             xoff = monitor.xoffset - win_monitor.xoffset
             yoff = monitor.yoffset - win_monitor.yoffset
 
@@ -98,18 +93,15 @@ class Window < X11::Window
             resized_geom = geom_to_use.dup
             resized_geom.x += xoff
             resized_geom.y += yoff
-            
-            @realgeom = resized_geom
 
-            p [:resized, @realgeom]
+            @realgeom = resized_geom
           end
         end
       end
       # Actually show the window with its geometry
       resize_to_geom(@realgeom) if @realgeom
     rescue X11::Error => e
-      # Window might be gone or invalid
-      pp [:error_showing_window, wid, e.message]
+      $logger.debug { "error showing window #{wid}: #{e.message}" }
     end
   end
 
@@ -126,7 +118,6 @@ class Window < X11::Window
     d&.active? ? show : hide
     
     if d && !d.is_a?(Symbol)
-      net_wm_desktop=d.id
       change_property(:replace, :_NET_WM_DESKTOP, :cardinal, 32, [d.id,0,0,0])
     end
   end
@@ -175,8 +166,7 @@ class Window < X11::Window
     begin
       configure(x: geom.x + hidden_offset, y: geom.y, width: geom.width, height: geom.height, **args)
     rescue X11::Error => e
-      # Window might be gone or invalid
-      pp [:error_resizing_window, wid, e.message]
+      $logger.debug { "error resizing window #{wid}: #{e.message}" }
     end
   end
 
@@ -189,12 +179,7 @@ class Window < X11::Window
 
   def toggle_maximize
     return if special?
-    rootgeom = desktop&.geometry || @wm.rootgeom
 
-    geom = get_geometry
-
-    pp [@old_geom, geom]
-    
     if @maximized == true
       @maximized = false
       @real_geom = @old_geom if @old_geom

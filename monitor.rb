@@ -33,7 +33,7 @@ module WM
     end
   
     def inspect
-      "<WM::Monitor name=#{@name} active_desktop=#{@active_desktop&.id} geometry=#{@geometry.inspect}>"
+      "<WM::Monitor id=#{@id} active_desktop=#{@active_desktop&.id} geometry=#{@geometry.inspect}>"
     end
   end
 end

@@ -23,10 +23,10 @@ require_relative 'leaf.rb'
 require_relative 'node.rb'
 
 def severity_colorize(severity) = case severity
-  when "INFO"  then "\e[33m"
-  when "DEBUG" then "\e[34m"
-  when "WARN"  then "\e[35m"
-  when "ERROR" then "\e[32m"
+  when "DEBUG" then "\e[34m"  # blue
+  when "INFO"  then "\e[32m"  # green
+  when "WARN"  then "\e[33m"  # yellow
+  when "ERROR" then "\e[31m"  # red
   else ""
 end
 

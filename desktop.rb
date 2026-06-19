@@ -29,7 +29,7 @@ class Desktop
   def hide     = children.each(&:hide)
   
   def inspect
-    "<Desktop id=#{id} monitor=#{@monitor&.name} window=#{@window}>"
+    "<Desktop id=#{id} monitor=#{@monitor&.id} window=#{@window}>"
   end
   
   def geometry = (@monitor&.geometry || @wm.rootgeom)
