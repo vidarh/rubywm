@@ -1,0 +1,225 @@
+#!/usr/bin/env bash
+#
+# wmh — RubyWM debugging harness (headless Xvfb by default; Xephyr to watch)
+#
+# Runs RubyWM on a private nested X display so it can be
+# driven and observed WITHOUT touching the real session on :0. Observation is by
+# screenshot (PNG, viewable), EWMH property dumps, and the window tree; input is
+# driven by xdotool and by RubyWM's own ClientMessage protocol (climsg.rb).
+#
+# Safety: refuses to run RubyWM on :0 or on the parent $DISPLAY, ever.
+#
+# Usage:
+#   wmh up [--geom WxH] [--dual] [--watch]
+#                                  start the WM on a private display.
+#                                  default: headless Xvfb (no window on :0)
+#                                  --watch: visible Xephyr window (to watch it)
+#                                  --dual : two Xinerama heads (forces Xephyr)
+#   wmh client <cmd...>            launch a client on the harness display (e.g. xterm, xclock)
+#   wmh msg <ATOM> [args...]       send a ClientMessage via climsg.rb (e.g. _NET_CURRENT_DESKTOP 2)
+#   wmh key <keys>                 send keys via xdotool (e.g. 'super+2')
+#   wmh shot [file.png]            screenshot the harness root (default: $STATE/shot-N.png)
+#   wmh props                      dump root EWMH properties
+#   wmh tree                       dump the window tree (xwininfo)
+#   wmh log [-f]                   show (or follow) the rubywm log
+#   wmh status                     show display + pids
+#   wmh down                       tear everything down and clean up
+#
+set -uo pipefail
+
+REPO="${RUBYWM_REPO:-/home/vidarh/Desktop/Projects/wm}"
+STATE="${WMH_STATE:-/tmp/wm-harness/run}"
+PARENT_DISPLAY="${DISPLAY:-}"
+
+mkdir -p "$STATE"
+
+die()  { echo "wmh: $*" >&2; exit 1; }
+info() { echo "wmh: $*" >&2; }
+
+# --- display selection -------------------------------------------------------
+
+pick_display() {
+  for n in $(seq 7 30); do
+    [ -e "/tmp/.X11-unix/X$n" ] && continue
+    [ -e "/tmp/.X$n-lock" ]     && continue
+    echo ":$n"; return 0
+  done
+  die "no free display found in :7..:30"
+}
+
+# Hard guardrail: never run the WM against the real session.
+assert_safe_display() {
+  local d="$1"
+  [ "$d" = ":0" ]               && die "refusing to use :0 (the real session)"
+  [ "$d" = "$PARENT_DISPLAY" ]  && die "refusing to use the parent display ($PARENT_DISPLAY)"
+  echo "$d" | grep -qE '^:[0-9]+$' || die "bad display '$d'"
+}
+
+hdisp() { cat "$STATE/display" 2>/dev/null || die "no harness running (use 'wmh up')"; }
+
+# --- lifecycle ---------------------------------------------------------------
+
+cmd_up() {
+  local dual=0 watch=0 geom="1280x800"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dual)  dual=1; shift ;;
+      --watch) watch=1; shift ;;
+      --geom)  geom="$2"; shift 2 ;;
+      *) die "unknown 'up' option: $1" ;;
+    esac
+  done
+
+  [ -f "$STATE/display" ] && die "harness already up on $(cat "$STATE/display") (run 'wmh down' first)"
+  [ -f "$REPO/rubywm.rb" ] || die "RubyWM not found at $REPO (set RUBYWM_REPO)"
+
+  local d; d="$(pick_display)"
+  assert_safe_display "$d"
+
+  # Backend choice: headless Xvfb by default (no window on :0, CI-friendly).
+  # Xephyr is used when you want to watch (--watch) or need dual Xinerama heads
+  # (--dual), which Xvfb can't fake. Both always enable XINERAMA so RubyWM gets
+  # real monitor geometry (single-screen Xephyr without it reports a bogus 100x100).
+  local backend="xvfb"
+  { [ "$watch" = 1 ] || [ "$dual" = 1 ]; } && backend="xephyr"
+  command -v "$( [ "$backend" = xvfb ] && echo Xvfb || echo Xephyr )" >/dev/null \
+    || die "$backend not installed"
+
+  local label="$geom"
+  [ "$dual" = 1 ]  && label="$label dual"
+  [ "$watch" = 1 ] && label="$label watch"
+  info "starting $backend on $d ($label [$backend])"
+  if [ "$backend" = xvfb ]; then
+    Xvfb "$d" -screen 0 "${geom}x24" +extension XINERAMA -nolisten tcp \
+      >"$STATE/server.log" 2>&1 &
+  else
+    local screens=( -screen "$geom" )
+    [ "$dual" = 1 ] && screens=( -screen "$geom" -screen "$geom" )
+    Xephyr "$d" -ac -no-host-grab -br -resizeable +xinerama "${screens[@]}" \
+      >"$STATE/server.log" 2>&1 &
+  fi
+  echo $! > "$STATE/server.pid"
+  echo "$backend" > "$STATE/backend"
+
+  # wait for the nested server to accept connections
+  local i
+  for i in $(seq 1 50); do
+    [ -e "/tmp/.X11-unix/X${d#:}" ] && DISPLAY="$d" xdotool getdisplaygeometry >/dev/null 2>&1 && break
+    sleep 0.1
+  done
+  [ -e "/tmp/.X11-unix/X${d#:}" ] || { cat "$STATE/server.log" >&2; die "$backend failed to start"; }
+
+  echo "$d" > "$STATE/display"
+
+  info "starting rubywm on $d"
+  # Force Ruby IO sync so stdout (pp/p) is captured even if the WM is killed.
+  # (stdbuf can't help here — Ruby manages its own buffers, not glibc's.)
+  # $logger already writes unbuffered to stderr regardless.
+  ( cd "$REPO" && DISPLAY="$d" exec ruby -e 'STDOUT.sync=STDERR.sync=true; load "./rubywm.rb"' ) \
+    >"$STATE/rubywm.log" 2>&1 &
+  echo $! > "$STATE/rubywm.pid"
+
+  # wait for the WM to advertise itself (number of desktops appears)
+  for i in $(seq 1 50); do
+    DISPLAY="$d" xprop -root _NET_NUMBER_OF_DESKTOPS 2>/dev/null | grep -q '=' && break
+    sleep 0.1
+  done
+  info "up on $d ($backend pid $(cat "$STATE/server.pid"), rubywm pid $(cat "$STATE/rubywm.pid"))"
+  cmd_props
+}
+
+cmd_down() {
+  local d; d="$(cat "$STATE/display" 2>/dev/null || true)"
+  for p in rubywm server; do
+    if [ -f "$STATE/$p.pid" ]; then
+      kill "$(cat "$STATE/$p.pid")" 2>/dev/null
+      sleep 0.2
+      kill -9 "$(cat "$STATE/$p.pid")" 2>/dev/null
+    fi
+  done
+  # reap any client procs we launched
+  if [ -f "$STATE/clients.pids" ]; then
+    while read -r pid; do kill "$pid" 2>/dev/null; done < "$STATE/clients.pids"
+  fi
+  rm -f "$STATE"/*.pid "$STATE/display" "$STATE/clients.pids" "$STATE/backend"
+  info "down${d:+ (was $d)}"
+}
+
+# --- driving -----------------------------------------------------------------
+
+cmd_client() {
+  local d; d="$(hdisp)"
+  [ $# -gt 0 ] || die "usage: wmh client <cmd...>"
+  DISPLAY="$d" "$@" >/dev/null 2>&1 &
+  echo $! >> "$STATE/clients.pids"
+  info "launched client pid $! on $d: $*"
+  sleep 0.4
+}
+
+cmd_msg() {
+  local d; d="$(hdisp)"
+  [ $# -gt 0 ] || die "usage: wmh msg <ATOM> [args...]"
+  ( cd "$REPO" && DISPLAY="$d" ruby climsg.rb "$@" )
+  sleep 0.3
+}
+
+cmd_key() {
+  local d; d="$(hdisp)"
+  [ $# -gt 0 ] || die "usage: wmh key <keys>"
+  DISPLAY="$d" xdotool key "$@"
+  sleep 0.2
+}
+
+# --- observing ---------------------------------------------------------------
+
+cmd_shot() {
+  local d; d="$(hdisp)"
+  local out="${1:-}"
+  if [ -z "$out" ]; then
+    local n=1; while [ -e "$STATE/shot-$n.png" ]; do n=$((n+1)); done
+    out="$STATE/shot-$n.png"
+  fi
+  DISPLAY="$d" import -window root "$out" 2>/dev/null \
+    || DISPLAY="$d" xwd -root -silent | convert xwd:- "$out"
+  echo "$out"
+}
+
+cmd_props() {
+  local d; d="$(hdisp)"
+  DISPLAY="$d" xprop -root \
+    _NET_SUPPORTING_WM_CHECK _NET_SUPPORTED _NET_NUMBER_OF_DESKTOPS \
+    _NET_CURRENT_DESKTOP _NET_ACTIVE_WINDOW _NET_CLIENT_LIST _NET_DESKTOP_NAMES \
+    _NET_WORKAREA 2>/dev/null
+}
+
+cmd_tree()   { local d; d="$(hdisp)"; DISPLAY="$d" xwininfo -root -tree -int; }
+cmd_status() {
+  if [ -f "$STATE/display" ]; then
+    echo "display : $(cat "$STATE/display")"
+    echo "backend : $(cat "$STATE/backend" 2>/dev/null)"
+    echo "server  : $(cat "$STATE/server.pid" 2>/dev/null)"
+    echo "rubywm  : $(cat "$STATE/rubywm.pid" 2>/dev/null)"
+  else
+    echo "(down)"
+  fi
+}
+cmd_log() {
+  if [ "${1:-}" = "-f" ]; then tail -f "$STATE/rubywm.log"; else cat "$STATE/rubywm.log"; fi
+}
+
+# --- dispatch ----------------------------------------------------------------
+
+sub="${1:-}"; shift || true
+case "$sub" in
+  up)     cmd_up "$@" ;;
+  down)   cmd_down "$@" ;;
+  client) cmd_client "$@" ;;
+  msg)    cmd_msg "$@" ;;
+  key)    cmd_key "$@" ;;
+  shot)   cmd_shot "$@" ;;
+  props)  cmd_props "$@" ;;
+  tree)   cmd_tree "$@" ;;
+  status) cmd_status "$@" ;;
+  log)    cmd_log "$@" ;;
+  *) sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac
