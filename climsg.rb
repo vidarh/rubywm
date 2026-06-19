@@ -11,7 +11,7 @@ if ARGV[0] == "-w"
   ARGV.shift
   wname = ARGV.shift
   if wname == "focused"
-    win = dpy.get_input_focus
+    win = dpy.get_input_focus.focus
   else
     win = Integer(wname) rescue nil
   end
@@ -41,7 +41,7 @@ msg = {
   type: ARGV[0],
   data: data
 }
-msg[:window] = win.focus if win
+msg[:window] = win if win
 
 dpy.client_message(**msg)
 
