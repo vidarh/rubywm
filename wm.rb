@@ -62,6 +62,38 @@ class WindowManager
        # Fallback to desktop 0 if no active desktop
        change_desktop(0)
      end
+
+     setup_ewmh
+  end
+
+  # EWMH hints we actually honour. Advertised via _NET_SUPPORTED so toolkits
+  # (and pagers/wmctrl) know an EWMH-compliant WM is running.
+  SUPPORTED_HINTS = %i[
+    _NET_SUPPORTING_WM_CHECK _NET_SUPPORTED
+    _NET_NUMBER_OF_DESKTOPS _NET_CURRENT_DESKTOP
+    _NET_ACTIVE_WINDOW _NET_CLIENT_LIST
+    _NET_WM_DESKTOP _NET_WM_STATE _NET_WM_STATE_FULLSCREEN
+    _NET_WM_WINDOW_TYPE _NET_WM_WINDOW_TYPE_DESKTOP
+    _NET_WM_WINDOW_TYPE_DOCK _NET_WM_WINDOW_TYPE_DIALOG
+  ].freeze
+
+  # Advertise EWMH compliance: a persistent child window referenced by
+  # _NET_SUPPORTING_WM_CHECK on both the root and itself, named via
+  # _NET_WM_NAME, plus the _NET_SUPPORTED hint list on the root.
+  def setup_ewmh
+    @check_window = @dpy.create_window(-1, -1, 1, 1,
+      depth: rootgeom.depth,
+      values: { X11::Form::CWOverrideRedirect => 1 })
+    win_bytes = [@check_window].pack("V*").unpack("C*")
+    @dpy.change_property(:replace, root.wid,      :_NET_SUPPORTING_WM_CHECK, :window, 32, win_bytes)
+    @dpy.change_property(:replace, @check_window, :_NET_SUPPORTING_WM_CHECK, :window, 32, win_bytes)
+    change_property(:_NET_SUPPORTED, :atom, SUPPORTED_HINTS.map { dpy.atom(_1) })
+    # FIXME: Also set _NET_WM_NAME ("rubywm", UTF8_STRING) on the check window.
+    # Blocked by a pure-x11 ChangeProperty bug: it sizes the request for 4-byte
+    # padded data but emits the raw bytes, so any format-8 property whose length
+    # isn't a multiple of 4 raises "BAD LENGTH". (Same bug Rebar pads around.)
+  rescue => e
+    $logger.error("setup_ewmh failed: #{e.class}: #{e.message}")
   end
 
   def set_current_desktop(desktop)
