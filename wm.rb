@@ -71,7 +71,7 @@ class WindowManager
   SUPPORTED_HINTS = %i[
     _NET_SUPPORTING_WM_CHECK _NET_SUPPORTED
     _NET_NUMBER_OF_DESKTOPS _NET_CURRENT_DESKTOP
-    _NET_ACTIVE_WINDOW _NET_CLIENT_LIST
+    _NET_ACTIVE_WINDOW _NET_CLIENT_LIST _NET_CLOSE_WINDOW
     _NET_WM_DESKTOP _NET_WM_STATE _NET_WM_STATE_FULLSCREEN
     _NET_WM_WINDOW_TYPE _NET_WM_WINDOW_TYPE_DESKTOP
     _NET_WM_WINDOW_TYPE_DOCK _NET_WM_WINDOW_TYPE_DIALOG
@@ -633,15 +633,13 @@ class WindowManager
     end
   end
 
-  # FIXME: This should be _NET_CLOSE_WINDOW
-  # and _NET_CLOSE_WINDOW should initiate a WM_DELETE_WINDOW
-  # *to the client* if they support it, w/fallback to destroyf
   def on_net_wm_desktop(wid, d) = move_to_desktop(wid, d)
 
-  def on_wm_delete_window(*args)
-    # FIXME: Include id in args
-    @focus.destroy if @focus
-  end
+  # EWMH: ask the WM to close a specific window gracefully.
+  def on_net_close_window(wid, *) = window(wid)&.request_close
+
+  # Close the focused window (kept for the keybinding that sends this to root).
+  def on_wm_delete_window(*) = @focus&.request_close
 
   # # RWM specific ClientMessages
   

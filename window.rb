@@ -3,6 +3,11 @@
 # Until it isn't.
 HIDDEN_OFFSET=10000
 
+# ICCCM WM_STATE values
+WITHDRAWN_STATE = 0
+NORMAL_STATE    = 1
+ICONIC_STATE    = 3
+
 class Window < X11::Window
   attr_reader :desktop, :hidden, :mapped, :realgeom
   attr_writer :floating
@@ -51,16 +56,27 @@ class Window < X11::Window
   def layout_leaf = @desktop&.layout.find(self)
   def floating? = @desktop&.layout.nil? || @floating
 
+  # ICCCM WM_STATE so pagers/clients know whether we consider a window
+  # mapped (Normal) or hidden (Iconic).
+  def set_wm_state(state)
+    change_property(:replace, :WM_STATE, dpy.atom(:WM_STATE), 32,
+                    [state, 0].pack("V*").unpack("C*"))
+  rescue X11::Error => e
+    $logger.debug { "error setting WM_STATE on #{wid}: #{e.message}" }
+  end
+
   def hide
     return if @hidden
     @hidden=true
     @realgeom = get_geometry
     resize_to_geom(@realgeom)
+    set_wm_state(ICONIC_STATE)
   end
 
   def show
     return if !@hidden
     @hidden = false
+    set_wm_state(NORMAL_STATE)
     begin
       # If this is a floating window on a desktop with a monitor
       if floating? && @desktop && (monitor = @desktop.monitor)
@@ -113,6 +129,7 @@ class Window < X11::Window
   def map
     super
     stack
+    set_wm_state(NORMAL_STATE)
   end
   
   def desktop= d
@@ -159,6 +176,21 @@ class Window < X11::Window
   end
     
   def maximize = (set_border_width(0) and resize_to_geom(desktop&.geometry || @wm.rootgeom, stack_mode: :above))
+
+  # Ask the client to close itself via WM_DELETE_WINDOW if it advertises the
+  # protocol (so it can prompt to save etc.); otherwise destroy it outright.
+  def request_close
+    protocols = Array(get_property(:WM_PROTOCOLS, :atom)&.value)
+    if protocols.include?(dpy.atom(:WM_DELETE_WINDOW))
+      dpy.client_message(window: wid, destination: wid, type: :WM_PROTOCOLS,
+                         format: 32, mask: 0, propagate: false,
+                         data: [dpy.atom(:WM_DELETE_WINDOW), 0])
+    else
+      destroy
+    end
+  rescue X11::Error => e
+    $logger.debug { "error closing #{wid}: #{e.message}" }
+  end
 
   def resize_to_geom(geom, **args)
     # Skip if no geometry or invalid
