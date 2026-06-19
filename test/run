@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Run the headless unit suite (no X server needed).
+#   test/run                 # run all test/unit/test_*.rb
+#   test/run test_geom.rb    # run a single file
+set -euo pipefail
+cd "$(dirname "$0")/.."
+if [ $# -gt 0 ]; then
+  exec bundle exec ruby -Itest "test/unit/$1"
+fi
+exec bundle exec ruby -Itest -e 'Dir["test/unit/test_*.rb"].sort.each { |f| load f }'
