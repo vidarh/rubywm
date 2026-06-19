@@ -13,6 +13,7 @@ require 'set'
 require 'yaml'
 require 'logger'
 
+require_relative 'options'
 require_relative 'window.rb'
 require_relative 'wm.rb'
 require_relative 'desktop.rb'
@@ -56,15 +57,15 @@ d.on(:client_message) do |ev|
   d.(name, ev.window, *data)
 end
 
-# FIXME: Proper arg parsing
-if ARGV.shift == "--drb"
-  STDERR.puts "Starting DRB"
+opts = Options.parse(ARGV)
+
+if opts[:drb]
+  $logger.info("Starting DRb service")
   require_relative './drb'
   start_drb_service
-  gets
 end
 
-if ARGV.shift == "--debug"
+if opts[:debug]
   Thread.new do
     binding.irb
   end

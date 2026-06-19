@@ -20,10 +20,14 @@ class WindowManager
     change_property(:_NET_NUMBER_OF_DESKTOPS, :cardinal, @desktops.count)
 
     mask = X11::Form::ButtonPressMask|X11::Form::ButtonReleaseMask|X11::Form::PointerMotionMask
-    root.grab_button(true, mask, :async, :async, 0, 0, 1, X11::Form::Mod2|X11::Form::Mod4)
-    root.grab_button(true, mask, :async, :async, 0, 0, 3, X11::Form::Mod2|X11::Form::Mod4)
-    root.grab_button(true, mask, :async, :async, 0, 0, 1, X11::Form::Mod4)
-    root.grab_button(true, mask, :async, :async, 0, 0, 3, X11::Form::Mod4)
+    # Grab Super+button1/3 (move/resize), ignoring the lock modifiers
+    # (NumLock=Mod2, CapsLock=Lock) by grabbing every combination of them.
+    lock_combos = [0, X11::Form::Mod2, X11::Form::Lock, X11::Form::Mod2|X11::Form::Lock]
+    [1, 3].each do |button|
+      lock_combos.each do |lock|
+        root.grab_button(true, mask, :async, :async, 0, 0, button, X11::Form::Mod4|lock)
+      end
+    end
 
     eventmask = (X11::Form::SubstructureNotifyMask |
        X11::Form::SubstructureRedirectMask |
@@ -534,7 +538,6 @@ class WindowManager
   def on_button_release(ev) = (@start.child = nil if @start)
   def on_focus_in(ev)       = focus || set_focus(ev.event)
   def on_enter_notify(ev)   = set_focus(ev.event)
-  def on_unmap_notify(ev)   = window(ev.window)&.desktop&.update_layout
   def on_destroy_notify(ev) = destroy_window(ev.window)
 
   # # Client Messages

@@ -9,6 +9,9 @@ class Window < X11::Window
 
   def eql?(other) = (wid == other&.wid)
   def ==(other) = eql?(other)
+  # eql? is overridden by wid, so hash must match it for Set/Array membership
+  # (e.g. `windows - @root.children` in the tiled layout) to work.
+  def hash = wid.hash
 
   def initialize(wm, wid, desktop=nil, floating: false)
     super(wm.dpy, wid)
@@ -182,7 +185,7 @@ class Window < X11::Window
 
     if @maximized == true
       @maximized = false
-      @real_geom = @old_geom if @old_geom
+      @realgeom = @old_geom if @old_geom
       resize_to_geom(@realgeom)
       set_border_width
       desktop.update_layout
