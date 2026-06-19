@@ -497,6 +497,35 @@ class WindowManager
   def on_map_notify(ev)      = (window(ev.window)&.mapped = true)
   def on_unmap_notify(ev)    = (window(ev.window)&.mapped = false)
   def on_map_request(ev)     = map_window(ev.window)
+
+  # ConfigureWindow value-mask bits and stack_mode values (X11 core protocol).
+  CONFIGURE_FIELDS = { 0x01 => :x, 0x02 => :y, 0x04 => :width,
+                       0x08 => :height, 0x10 => :border_width }.freeze
+  STACK_MODES = { 0 => :above, 1 => :below, 2 => :top_if,
+                  3 => :bottom_if, 4 => :opposite }.freeze
+
+  # A client asked to reconfigure itself. Because we hold SubstructureRedirect
+  # the server applied nothing and handed us the request. Honour it for
+  # floating/unmanaged windows (dialogs, pickers sizing themselves); for tiled
+  # windows the WM owns geometry, so re-assert the tile, which still sends the
+  # client a ConfigureNotify telling it its real size.
+  def on_configure_request(ev)
+    w = @windows[ev.window]
+    if w && !w.floating?
+      w.resize_to_geom(w.realgeom) if w.realgeom
+      return
+    end
+
+    args = CONFIGURE_FIELDS.each_with_object({}) do |(bit, field), h|
+      h[field] = ev.send(field) if ev.value_mask & bit != 0
+    end
+    args[:stack_mode] = STACK_MODES[ev.stack_mode] if ev.value_mask & 0x40 != 0
+    return if args.empty?
+
+    w ? w.configure(**args) : @dpy.configure_window(ev.window, **args)
+  rescue X11::Error => e
+    $logger.debug { "error configuring #{ev.window}: #{e.message}" }
+  end
   def on_property_notify(ev)
     name = dpy.get_atom_name(ev.atom) rescue nil
     $logger.info("Property Notify: #{name}")

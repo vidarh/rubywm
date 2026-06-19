@@ -4,7 +4,7 @@
 HIDDEN_OFFSET=10000
 
 class Window < X11::Window
-  attr_reader :desktop, :hidden, :mapped
+  attr_reader :desktop, :hidden, :mapped, :realgeom
   attr_writer :floating
 
   def eql?(other) = (wid == other&.wid)
