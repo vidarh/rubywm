@@ -87,11 +87,8 @@ class WindowManager
     win_bytes = [@check_window].pack("V*").unpack("C*")
     @dpy.change_property(:replace, root.wid,      :_NET_SUPPORTING_WM_CHECK, :window, 32, win_bytes)
     @dpy.change_property(:replace, @check_window, :_NET_SUPPORTING_WM_CHECK, :window, 32, win_bytes)
+    @dpy.change_property(:replace, @check_window, :_NET_WM_NAME, dpy.atom(:UTF8_STRING), 8, "rubywm".bytes)
     change_property(:_NET_SUPPORTED, :atom, SUPPORTED_HINTS.map { dpy.atom(_1) })
-    # FIXME: Also set _NET_WM_NAME ("rubywm", UTF8_STRING) on the check window.
-    # Blocked by a pure-x11 ChangeProperty bug: it sizes the request for 4-byte
-    # padded data but emits the raw bytes, so any format-8 property whose length
-    # isn't a multiple of 4 raises "BAD LENGTH". (Same bug Rebar pads around.)
   rescue => e
     $logger.error("setup_ewmh failed: #{e.class}: #{e.message}")
   end

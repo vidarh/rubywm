@@ -24,6 +24,9 @@ present "root has _NET_SUPPORTING_WM_CHECK" "$root_chk"
 self_chk=$(DISPLAY=$D xprop -id "$root_chk" _NET_SUPPORTING_WM_CHECK 2>/dev/null | grep -oE '0x[0-9a-f]+')
 check "check window references itself" "$self_chk" "$root_chk"
 
+wm_name=$(DISPLAY=$D xprop -id "$root_chk" _NET_WM_NAME 2>/dev/null | sed -n 's/.*= "\(.*\)"/\1/p')
+check "check window has _NET_WM_NAME" "$wm_name" "rubywm"
+
 supported=$(DISPLAY=$D xprop -root _NET_SUPPORTED 2>/dev/null | grep -oc '_NET_SUPPORTING_WM_CHECK')
 check "_NET_SUPPORTED advertised" "$( [ "$supported" -ge 1 ] && echo yes )" "yes"
 
