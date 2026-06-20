@@ -215,7 +215,7 @@ class WindowManager
     process_monitors
 
     # FIXME: Move to each monitor.
-    @floating = FloatingLayout.new(self, rootgeom)
+    @floating = FloatingLayout.new(self)
 
     num_desktops = config.dig(:desktops, :number) || 10
     @desktops ||= num_desktops.times.map do |num|
@@ -256,8 +256,6 @@ class WindowManager
   def root               = (@root ||=Window.new(self, root_id))
   def layout_for(w)
     if w.floating?
-      # Ensure floating layout knows about the desktop
-      @floating.set_desktop(w.desktop) if w.desktop
       return @floating
     else
       desktop = w.desktop
@@ -465,12 +463,6 @@ class WindowManager
           win_layout.update_geometry(desktop.geometry)
         end
         
-        # Associate floating layout with the desktop if needed
-        if w.floating?
-          @floating.set_desktop(nil) # Reset first
-          @floating.set_desktop(desktop)
-        end
-        
         # Now place the window using the layout with updated monitor information
         win_layout.place(w, @focus)
       end
@@ -555,15 +547,10 @@ class WindowManager
     set_focus(f.wid) if f
   end
 
-  # Point a desktop's layout (its tiled layout, or the shared floating layout)
-  # at a monitor's geometry.
+  # Point a tiled desktop's layout at a monitor's geometry. Floating desktops
+  # have no layout — their windows position themselves in place()/show().
   def point_layout_at(desktop, monitor)
-    if desktop.layout
-      desktop.layout.update_geometry(monitor.geometry)
-    else
-      @floating.set_desktop(desktop)
-      @floating.update_geometry(monitor.geometry)
-    end
+    desktop.layout&.update_geometry(monitor.geometry)
   end
 
 

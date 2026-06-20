@@ -5,26 +5,12 @@
 require_relative 'layout'
 
 class FloatingLayout < Layout
-  def initialize(wm, rootgeom)
+  def initialize(wm)
     @wm = wm
-    @rootgeom = rootgeom
-    @desktop = nil
   end
 
-  # Update geometry when desktop monitor changes
-  def update_geometry(geom)
-    @rootgeom = geom
-  end
-  
-  # Associate with a desktop
-  def set_desktop(desktop)
-    @desktop = desktop
-  end
-  
   def find(w) = nil
-  
-  def current_geometry = @wm.active_monitor.geometry #(@desktop&.geometry || @rootgeom)
-    
+
   def place(w, focus)
     # Desktop windows are pinned to their own desktop (handled in map_window);
     # never re-place or reassign them here.
