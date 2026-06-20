@@ -49,5 +49,16 @@ DISPLAY=$D xdotool mousemove 1200 300
 $WMH msg _NET_CURRENT_DESKTOP 9 >/dev/null 2>&1; sleep 0.5   # move floating desktop to monitor 1
 check "floating window follows desktop to monitor 1" "$(range "$fw")" "right"
 
+# A new floating window with a saved absolute position on another monitor should
+# open on the active monitor at the same position relative to its monitor (so
+# e.g. Chrome's saved location doesn't drag it to the wrong monitor).
+DISPLAY=$D xdotool mousemove 200 300                          # active monitor = 0 (left)
+$WMH msg _NET_CURRENT_DESKTOP 9 >/dev/null 2>&1; sleep 0.3    # floating desktop back on monitor 0
+$WMH client xterm -geometry 50x10+1000+100 -e 'sleep 600' >/dev/null 2>&1; sleep 1
+nw=$($WMH tree 2>/dev/null | awk '/xterm/{print $1; exit}')
+nx=$(DISPLAY=$D xwininfo -id "$nw" 2>/dev/null | awk '/Absolute upper-left X/{print $NF}')
+check "window requesting a monitor-1 position opens on monitor 0" "$(range "$nw")" "left"
+check "...at the same monitor-relative offset (1000-800 -> 200)"   "$nx"           "200"
+
 if [ "$fail" = 0 ]; then echo "PASS"; else echo "FAILURES"; fi
 exit $fail
