@@ -573,10 +573,20 @@ class WindowManager
     return if wid == root_id
     with_window(wid) do |w|
       w = window(wid)
-    
-      # FIXME: This may be a bit brutal, in that it prevents keyboard control of the desktop or dock.
-      return if w.special?
-    
+
+      # Docks never take the keyboard.
+      return if w.dock?
+
+      # Desktop/backdrop windows may receive the keyboard (so their own
+      # shortcuts work while the pointer is over them), but they are not the
+      # WM's logical focus target for tiling/commands and get no focus border.
+      # Global keybindings keep working: sxhkd's root grabs still fire whatever
+      # holds the input focus.
+      if w.desktop?
+        w.set_input_focus(:parent)
+        return
+      end
+
       @focus&.set_border(@border_normal)
       @focus = w
       @focus.set_input_focus(:parent)
