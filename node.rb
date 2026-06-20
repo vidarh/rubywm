@@ -1,4 +1,9 @@
 class Node
+  # A lone tiled window doesn't fill its container — it's narrowed and centred
+  # so a single window isn't stretched edge-to-edge. This is the fraction of the
+  # width reserved as margin on *each* side (so 2× is removed from the width).
+  LONE_WINDOW_MARGIN = 0.15
+
   attr_accessor :ratio, :nodes, :dir, :parent
   attr_reader :geom
 
@@ -69,12 +74,11 @@ class Node
     when 1
       g = geom.dup
       if level==0 && @nodes[0].is_a?(Leaf)
-        # Scale the adjustment based on monitor width
-        width_reduction = (g.width * 0.3).to_i
-        x_offset = (g.width * 0.15).to_i
-        
-        g.width -= width_reduction
-        g.x += x_offset
+        # Narrow a lone window and centre it (margin reserved on each side).
+        reduction = (g.width * LONE_WINDOW_MARGIN * 2).to_i
+        offset    = (g.width * LONE_WINDOW_MARGIN).to_i
+        g.width -= reduction
+        g.x     += offset
       end
       @nodes[0].layout(g, gap, nextdir, level+1)
     when 2

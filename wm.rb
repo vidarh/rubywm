@@ -799,6 +799,9 @@ class WindowManager
     end
   end
 
+  # Pixels a floating window moves per _RWM_MOVE step.
+  FLOAT_MOVE_STEP = 20
+
   # Move the focused window, either swapping it into the container
   # of the nearest leaf (if tiled), or moving it stepwise if floating.
   # Direction stays a (cached) atom name on purpose — it's hand-written in
@@ -811,10 +814,10 @@ class WindowManager
       g = @focus.get_geometry
 
       case dir
-      when :left  then @focus.configure(x: g.x - 20)
-      when :right then @focus.configure(x: g.x + 20)
-      when :down  then @focus.configure(y: g.y + 20)
-      when :up    then @focus.configure(y: g.y - 20)
+      when :left  then @focus.configure(x: g.x - FLOAT_MOVE_STEP)
+      when :right then @focus.configure(x: g.x + FLOAT_MOVE_STEP)
+      when :down  then @focus.configure(y: g.y + FLOAT_MOVE_STEP)
+      when :up    then @focus.configure(y: g.y - FLOAT_MOVE_STEP)
       end
       return
     end

@@ -5,6 +5,10 @@
 require_relative 'layout'
 
 class FloatingLayout < Layout
+  # Windows that map at a degenerate size are given this fraction of the
+  # monitor instead, so they're usable rather than 1×1.
+  DEFAULT_SIZE_SCALE = 0.7
+
   def initialize(wm)
     @wm = wm
   end
@@ -25,8 +29,8 @@ class FloatingLayout < Layout
     # Default to 70% of the monitor only for windows that map at a degenerate
     # size; otherwise respect the size the client asked for.
     if attr.width < 10 || attr.height < 10
-      width  = (geom.width  * 0.7).to_i
-      height = (geom.height * 0.7).to_i
+      width  = (geom.width  * DEFAULT_SIZE_SCALE).to_i
+      height = (geom.height * DEFAULT_SIZE_SCALE).to_i
     else
       width  = attr.width
       height = attr.height

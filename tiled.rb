@@ -1,5 +1,8 @@
 
 GAP = 64
+# Outer gap shrinks as a desktop gains windows, so a busy desktop wastes less
+# edge space. Each additional top-level window divides the gap by this factor.
+GAP_DECAY = 1.3
 
 require_relative 'geom.rb'
 require_relative 'leaf.rb'
@@ -37,7 +40,7 @@ class TiledLayout < Layout
   end
 
   def relayout
-    g = GAP/(1.3 ** @root.children.length)
+    g = GAP/(GAP_DECAY ** @root.children.length)
     @root.layout(gap(@geom,g), g)
   end
   
