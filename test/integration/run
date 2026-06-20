@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# Run all integration tests (need Xvfb + the harness). Each is self-contained.
+# Run the headless integration tests (need Xvfb + the harness). Each is
+# self-contained. Tests that require Xephyr (dual_monitor.sh — opens a visible
+# window) are skipped here; run them explicitly.
 set -uo pipefail
 cd "$(dirname "$0")"
 fail=0
 for t in *.sh; do
+  case "$t" in dual_*.sh) echo "=== $t (skipped — run explicitly; needs Xephyr) ==="; continue ;; esac
   echo "=== $t ==="
   if ! ./"$t"; then fail=1; fi
 done

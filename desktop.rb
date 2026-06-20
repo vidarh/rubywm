@@ -4,20 +4,13 @@ require_relative 'monitor'
 
 class Desktop
   attr_accessor :name, :id, :wm, :layout, :window
-  attr_reader :monitor
-  
-  def monitor=(monitor)
-    return if @monitor == monitor
-    old_monitor = @monitor
-    @monitor = monitor
-    if old_monitor&.active_desktop == self
-      old_monitor.active_desktop = nil
-    end
-    @monitor&.active_desktop = self
-  end
 
-  def initialize(wm, id, name) = (@wm, @id, @name, @monitor = wm, id, name, nil)
-  def active? = (@monitor&.active_desktop == self)
+  def initialize(wm, id, name) = (@wm, @id, @name = wm, id, name)
+
+  # Derived from the monitors: the monitor (if any) currently showing this
+  # desktop. Monitor#active_desktop is the single source of truth.
+  def monitor = @wm.monitors.find { _1.active_desktop == self }
+  def active? = !monitor.nil?
 
   def children = @wm.windows.values.find_all{_1.desktop==self}
   def mapped_regular_children = children.find_all{_1.mapped && !_1.special?}
@@ -29,9 +22,9 @@ class Desktop
   def hide     = children.each(&:hide)
   
   def inspect
-    "<Desktop id=#{id} monitor=#{@monitor&.id} window=#{@window}>"
+    "<Desktop id=#{id} monitor=#{monitor&.id} window=#{@window}>"
   end
-  
-  def geometry = (@monitor&.geometry || @wm.rootgeom)
+
+  def geometry = (monitor&.geometry || @wm.rootgeom)
   def update_layout = (active? && layout&.call(@wm.focus))
 end

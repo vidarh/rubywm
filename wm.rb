@@ -3,7 +3,7 @@ require_relative 'floating'
 require_relative 'monitor'
 
 class WindowManager
-  attr_reader :dpy, :desktops, :windows, :focus
+  attr_reader :dpy, :desktops, :windows, :focus, :monitors
 
   def inspect = "<WindowManager>"
 
@@ -93,10 +93,10 @@ class WindowManager
     $logger.error("setup_ewmh failed: #{e.class}: #{e.message}")
   end
 
-  def set_current_desktop(desktop)
+  def set_current_desktop(desktop, monitor = active_monitor)
     @current_desktop_id = desktop
     change_property(:_NET_CURRENT_DESKTOP, :cardinal, desktop)
-    change_property("_NET_CURRENT_DESKTOP_MONITOR_#{active_monitor.id}".to_sym, :cardinal, desktop)
+    change_property("_NET_CURRENT_DESKTOP_MONITOR_#{monitor.id}".to_sym, :cardinal, desktop)
   end
   
   def process_node_child(spec, n)
@@ -417,58 +417,51 @@ class WindowManager
   def change_desktop(d) = change_desktop_on_monitor(active_monitor, d)
     
   def change_desktop_on_monitor(curr_monitor, d)
-    target_desktop = desktops[d] if !d.is_a?(Desktop)
-    return if !target_desktop
-    
-    current_monitor_desktop = curr_monitor.active_desktop
-    
-    # If we're already showing this desktop on current monitor, just update layout
-    if current_monitor_desktop&.id == d
+    target = d.is_a?(Desktop) ? d : desktops[d]
+    return if !target
+
+    current = curr_monitor.active_desktop
+
+    # Already showing the target on this monitor: just refresh.
+    if current == target
       update_layout
-      return current_monitor_desktop.show
+      return target.show
     end
-    
-    # Try to find if any other monitor is showing the target desktop
-    other_monitors_with_target = @monitors.select do |m| 
-      m != curr_monitor && 
-      m.active_desktop && 
-      m.active_desktop.id == target_desktop.id
-    end
-    
-    # Use the first one found if any
-    other_monitor = other_monitors_with_target.first
-    
-    current_monitor_desktop&.hide
 
-    # If the target monitor is shown on another monitor, swap that monitor to this
-    # monitors desktop
-    if other_monitor
-      current_monitor_desktop.monitor = nil
-      change_desktop_on_monitor(other_monitor, current_monitor_desktop.id)
-    end
-    
-    # Update desktop-monitor association
-    curr_monitor.active_desktop = target_desktop
-      
-    # Make sure layout geometry is updated 
-    if target_desktop.layout
-      target_desktop.layout.update_geometry(curr_monitor.geometry)
-    else
-      @floating.set_desktop(target_desktop)
-      @floating.update_geometry(curr_monitor.geometry)
-    end
-      
-    # Show the desktop
-    target_desktop.show
+    # If the target is currently shown on another monitor, that monitor takes
+    # over this monitor's desktop (the two simply swap).
+    other = @monitors.find { |m| m != curr_monitor && m.active_desktop == target }
 
-    # FIXME: pass monitor id
-    set_current_desktop(d)
-    
+    current&.hide
+    curr_monitor.active_desktop = target
+
+    if other
+      other.active_desktop = current
+      if current
+        point_layout_at(current, other)
+        current.show
+        set_current_desktop(current.id, other)
+      end
+    end
+
+    point_layout_at(target, curr_monitor)
+    target.show
+    set_current_desktop(target.id, curr_monitor)
     update_layout
-    
-    # Set focus to first window if available
-    f = target_desktop&.mapped_regular_children&.first
+
+    f = target.mapped_regular_children&.first
     set_focus(f.wid) if f
+  end
+
+  # Point a desktop's layout (its tiled layout, or the shared floating layout)
+  # at a monitor's geometry.
+  def point_layout_at(desktop, monitor)
+    if desktop.layout
+      desktop.layout.update_geometry(monitor.geometry)
+    else
+      @floating.set_desktop(desktop)
+      @floating.update_geometry(monitor.geometry)
+    end
   end
 
 

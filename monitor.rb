@@ -2,18 +2,11 @@
 
 module WM
   class Monitor
-    attr_reader :id, :width, :height, :xoffset, :yoffset, :geometry, :active_desktop
+    attr_reader :id, :width, :height, :xoffset, :yoffset, :geometry
+    # The monitor is the single source of truth for which desktop it shows;
+    # Desktop#monitor is derived from this (see desktop.rb).
+    attr_accessor :active_desktop
 
-    def active_desktop=(desktop)
-      return if @active_desktop == desktop
-      old_desktop = @active_desktop
-      @active_desktop = desktop
-      if old_desktop&.monitor == self
-        old_desktop.monitor = nil
-      end
-      @active_desktop&.monitor = self
-    end
-    
     def initialize(id, width:, height:, xoffset:, yoffset:)
       @id = id
 
