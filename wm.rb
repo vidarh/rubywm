@@ -84,6 +84,7 @@ class WindowManager
     _NET_NUMBER_OF_DESKTOPS _NET_CURRENT_DESKTOP
     _NET_ACTIVE_WINDOW _NET_CLIENT_LIST _NET_CLOSE_WINDOW
     _NET_WM_DESKTOP _NET_WM_STATE _NET_WM_STATE_FULLSCREEN
+    _NET_WM_STATE_MAXIMIZED_VERT _NET_WM_STATE_MAXIMIZED_HORZ
     _NET_WM_WINDOW_TYPE _NET_WM_WINDOW_TYPE_DESKTOP
     _NET_WM_WINDOW_TYPE_DOCK _NET_WM_WINDOW_TYPE_DIALOG
     _NET_WM_STRUT _NET_WM_STRUT_PARTIAL _NET_WORKAREA
@@ -726,17 +727,21 @@ class WindowManager
 
   def on_net_current_desktop(_, d) = change_desktop(d)
 
+  # EWMH _NET_WM_STATE: a message carries an action (remove/add/toggle) and up
+  # to two state atoms. Honour the action and distinguish fullscreen (whole
+  # monitor) from maximize (work area); a full maximize arrives as VERT+HORZ.
   def on_net_wm_state(wid, action, prop1, prop2, source)
     with_window(wid) do |w|
-      # FIXME: Need to check if "action" for toggle vs set/clear
       [prop1, prop2].each do |prop|
         case prop
+        when 0 then next
         when dpy.atom(:_NET_WM_STATE_FULLSCREEN)
-          w&.toggle_maximize
+          w.set_wm_state_flag(action, :fullscreen)
+        when dpy.atom(:_NET_WM_STATE_MAXIMIZED_VERT),
+             dpy.atom(:_NET_WM_STATE_MAXIMIZED_HORZ)
+          w.set_wm_state_flag(action, :maximized)
         end
       end
-      # For the time being, we recognize two things only:
-      # NET_WM_STATE_FULLSCREEN and NET_WM_STATE_MAXIMIZED_{VERT,HORZ}
     end
   end
 

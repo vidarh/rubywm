@@ -190,7 +190,55 @@ class Window < X11::Window
     return self.raise if dock? || floaty_type?
   end
     
-  def maximize = (set_border_width(0) and resize_to_geom(desktop&.geometry || @wm.rootgeom, stack_mode: :above))
+  # EWMH _NET_WM_STATE actions.
+  WM_STATE_REMOVE = 0
+  WM_STATE_ADD    = 1
+  WM_STATE_TOGGLE = 2
+
+  # Apply an EWMH _NET_WM_STATE change for one state `kind` (:fullscreen or
+  # :maximized) under `action`. Fullscreen covers the whole monitor (over
+  # docks, no border); maximize fills the work area (within struts). The
+  # pre-state geometry is saved once and restored once both states clear.
+  def set_wm_state_flag(action, kind)
+    return if special?
+    cur = kind == :fullscreen ? @fullscreen : @maximized
+    on  = action == WM_STATE_TOGGLE ? !cur : (action == WM_STATE_ADD)
+    return if on == cur
+    if kind == :fullscreen then @fullscreen = on else @maximized = on end
+    apply_state_geometry
+  end
+
+  # Re-assert geometry for the current flags (fullscreen wins when both are
+  # set), or restore the saved geometry when both are clear.
+  def apply_state_geometry
+    if @fullscreen || @maximized
+      @old_geom ||= get_geometry
+      target = @fullscreen ? (desktop&.geometry  || @wm.rootgeom)
+                           : (desktop&.work_area || @wm.rootgeom)
+      set_border_width(@fullscreen ? 0 : 1)
+      resize_to_geom(target, stack_mode: :above)
+    else
+      resize_to_geom(@old_geom) if @old_geom
+      @old_geom = nil
+      set_border_width
+      desktop&.update_layout
+    end
+    publish_wm_state
+  end
+
+  # Publish the window's current _NET_WM_STATE so pagers/clients can read it.
+  def publish_wm_state
+    atoms = []
+    atoms << dpy.atom(:_NET_WM_STATE_FULLSCREEN) if @fullscreen
+    if @maximized
+      atoms << dpy.atom(:_NET_WM_STATE_MAXIMIZED_VERT)
+      atoms << dpy.atom(:_NET_WM_STATE_MAXIMIZED_HORZ)
+    end
+    change_property(:replace, :_NET_WM_STATE, dpy.atom(:ATOM), 32,
+                    atoms.pack("V*").unpack("C*"))
+  rescue X11::Error => e
+    $logger.debug { "error publishing _NET_WM_STATE on #{wid}: #{e.message}" }
+  end
 
   # Ask the client to close itself via WM_DELETE_WINDOW if it advertises the
   # protocol (so it can prompt to save etc.); otherwise destroy it outright.
@@ -227,20 +275,4 @@ class Window < X11::Window
     change_attributes(values: {X11::Form::CWBorderPixel => col}) unless special?
   end
 
-  def toggle_maximize
-    return if special?
-
-    if @maximized == true
-      @maximized = false
-      @realgeom = @old_geom if @old_geom
-      resize_to_geom(@realgeom)
-      set_border_width
-      desktop.update_layout
-    else
-      # If maximized, and we know the old size, we revert the size.
-      @old_geom = get_geometry # This is wasteful
-      maximize
-      @maximized = true
-    end
-  end
 end
