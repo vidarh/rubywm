@@ -808,9 +808,9 @@ class WindowManager
   end
 
   # Move the focused window, either swapping it into the container
-  # of the nearest leaf (if tiled), or moving it stepwise if floating
-  # FIXME: Just have rwm move specify x/y *offsets* instead? Would
-  # save an (admittedly cached) get_atom_name
+  # of the nearest leaf (if tiled), or moving it stepwise if floating.
+  # Direction stays a (cached) atom name on purpose — it's hand-written in
+  # keybindings, where `Left` reads better than an integer offset.
   def on_rwm_move(_,dir)
     return if !@focus || @focus.special?
     dir = dpy.get_atom_name(dir).downcase.to_sym

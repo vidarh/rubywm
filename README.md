@@ -185,6 +185,33 @@ app that supports sending XClientMessage events can work:
 The `_RWM` events are custom for this WM. The others works on other
 EWMH compatible wms.
 
+### The `_RWM_*` protocol
+
+The `_RWM_*` messages are this WM's own command surface, sent as X11
+`ClientMessage` events (format 32) to the root window. State, by contrast,
+is published as EWMH properties (see *EWMH support* below) — commands in,
+properties out.
+
+Directions are passed by **name** (as X11 atoms), not as integers, because
+they are meant to be written by hand in keybindings — `_RWM_FOCUS Left` is
+self-explanatory where `_RWM_FOCUS 0` would not be. The WM resolves the atom
+name once per command (not a hot path). Names are matched case-insensitively.
+
+All of the window-oriented commands currently act on the **focused** window,
+regardless of the message's target window field (so `-w focused` is
+conventional but not yet load-bearing — see the `FIXME`s in `wm.rb`).
+
+| Message | `data[0]` | Effect |
+|---------|-----------|--------|
+| `_RWM_FOCUS` | `Left`/`Right`/`Up`/`Down` | Move focus to the nearest window in that direction. |
+| `_RWM_MOVE` | `Left`/`Right`/`Up`/`Down` | Floating window: nudge 20px that way. Tiled: swap with the nearest window in that direction. |
+| `_RWM_SHIFT_DIRECTION` | *(ignored)* | Toggle the split direction (horizontal ↔ vertical) of the focused window's parent node. |
+| `_RWM_SWAP_NODES` | *(ignored)* | Swap the two children of the focused window's parent node. |
+| `_RWM_MOVE_TO_MONITOR` | `next`/`previous` | Move the focused window to the desktop shown on the adjacent monitor. |
+
+`_RWM_SET_MONITOR` appears in the example bindings above but is **not yet
+implemented** — sending it currently has no effect.
+
 xclimsg is from https://github.com/phillbush/xclimsg
 I intend to "build in" the same client code in rubywm to avoid that
 external dependency. Alternatively you can e.g. use xdotool or similar
