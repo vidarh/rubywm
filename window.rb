@@ -77,6 +77,15 @@ class Window < X11::Window
     return if !@hidden
     @hidden = false
     set_wm_state(NORMAL_STATE)
+
+    # A desktop window follows its desktop to whatever monitor shows it and
+    # fills that monitor; it is not relocated like an ordinary floating window.
+    if desktop?
+      resize_to_geom(@desktop&.geometry || @wm.rootgeom)
+      lower
+      return
+    end
+
     begin
       # If this is a floating window on a desktop with a monitor
       if floating? && @desktop && (monitor = @desktop.monitor)

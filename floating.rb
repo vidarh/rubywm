@@ -26,6 +26,10 @@ class FloatingLayout < Layout
   def current_geometry = @wm.active_monitor.geometry #(@desktop&.geometry || @rootgeom)
     
   def place(w, focus)
+    # Desktop windows are pinned to their own desktop (handled in map_window);
+    # never re-place or reassign them here.
+    return if w.desktop?
+
     attr = w.get_geometry
     return if attr.is_a?(X11::Form::Error)
 

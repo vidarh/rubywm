@@ -346,7 +346,16 @@ class WindowManager
   def map_window(wid)
     with_window(wid) do |w|
       w.mapped = true
-      
+
+      # Desktop windows (e.g. the desktop/icon surface) stay pinned to their own
+      # desktop and fill its monitor; they are never tiled, floated, reassigned
+      # to another desktop, or focused. They are shown/hidden with their desktop.
+      if w.desktop?
+        w.resize_to_geom(w.desktop&.geometry || rootgeom)
+        w.map   # Window#stack lowers desktop windows below everything else
+        next
+      end
+
       # If the window is new, position it on appropriate monitor
       if !layout_for(w).find(w)
         monitor = active_monitor
