@@ -13,7 +13,11 @@ Runs RubyWM on a **private nested X display** so it can be driven and observed
   multi-head.
 
 Both always enable XINERAMA so RubyWM gets real monitor geometry (single-screen
-Xephyr *without* it advertises a bogus 100×100 screen, which RubyWM trusts).
+Xephyr *without* it advertises a bogus 100×100 screen, which RubyWM trusts). The
+Xephyr backend deliberately omits `-resizeable`: with it Xephyr defaults both
+framebuffer and window to 100×100 instead of honouring `-screen`, so `--watch`
+came up tiny. Without it the nested screen is the requested size and the parent
+WM sizes the host window normally.
 
 ## Safety
 - Picks a free display in `:7..:30`; **refuses** to run the WM on `:0` or on the

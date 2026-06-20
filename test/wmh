@@ -95,7 +95,11 @@ cmd_up() {
   else
     local screens=( -screen "$geom" )
     [ "$dual" = 1 ] && screens=( -screen "$geom" -screen "$geom" )
-    Xephyr "$d" -ac -no-host-grab -br -resizeable +xinerama "${screens[@]}" \
+    # NB: do NOT pass -resizeable — it makes Xephyr default the framebuffer (and
+    # window) to 100x100 instead of honouring -screen, so the visible window
+    # comes up tiny. Without it the nested screen is correct and the parent WM
+    # sizes the host window normally.
+    Xephyr "$d" -ac -no-host-grab -br +xinerama "${screens[@]}" \
       >"$STATE/server.log" 2>&1 &
   fi
   echo $! > "$STATE/server.pid"
