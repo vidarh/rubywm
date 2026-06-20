@@ -65,6 +65,16 @@ class WindowManager
 
      setup_ewmh
      publish_workarea
+     publish_desktop_names
+  end
+
+  # _NET_DESKTOP_NAMES: the WM owns desktop identity, so publish the names from
+  # config (UTF-8, NUL-separated and NUL-terminated) for pagers/docks to read.
+  def publish_desktop_names
+    bytes = (@desktops.map(&:name).join("\0") + "\0").bytes
+    root.change_property(:replace, :_NET_DESKTOP_NAMES, dpy.atom(:UTF8_STRING), 8, bytes)
+  rescue X11::Error => e
+    $logger.debug { "error publishing _NET_DESKTOP_NAMES: #{e.message}" }
   end
 
   # EWMH hints we actually honour. Advertised via _NET_SUPPORTED so toolkits
@@ -77,6 +87,7 @@ class WindowManager
     _NET_WM_WINDOW_TYPE _NET_WM_WINDOW_TYPE_DESKTOP
     _NET_WM_WINDOW_TYPE_DOCK _NET_WM_WINDOW_TYPE_DIALOG
     _NET_WM_STRUT _NET_WM_STRUT_PARTIAL _NET_WORKAREA
+    _NET_CLIENT_LIST_STACKING _NET_DESKTOP_NAMES
   ].freeze
 
   # Advertise EWMH compliance: a persistent child window referenced by
@@ -333,7 +344,20 @@ class WindowManager
     yield(w) if w
   end
   
-  def update_client_list = change_property(:_NET_CLIENT_LIST, :window, @windows.keys)
+  def update_client_list
+    change_property(:_NET_CLIENT_LIST, :window, @windows.keys)
+    update_client_list_stacking
+  end
+
+  # _NET_CLIENT_LIST_STACKING: managed windows in bottom-to-top stacking order.
+  # query_tree already returns children bottom-to-top, so filter it to the
+  # windows we manage.
+  def update_client_list_stacking
+    stacking = root.query_tree.children.select { |wid| @windows.key?(wid) }
+    change_property(:_NET_CLIENT_LIST_STACKING, :window, stacking)
+  rescue X11::Error => e
+    $logger.debug { "error updating _NET_CLIENT_LIST_STACKING: #{e.message}" }
+  end
 
   # If we don't already know about this window, we "adopt" it.
   def adopt(wid, desktop=nil)
@@ -458,6 +482,9 @@ class WindowManager
       w.map
       set_focus(wid) unless w.special?
     end
+    # Mapping (re)stacks the window, so refresh the stacking hint. (adopt
+    # publishes the list before the window is mapped.)
+    update_client_list_stacking
   end
 
   def move_to_desktop(wid,desktop)
