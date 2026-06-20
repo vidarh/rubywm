@@ -15,14 +15,10 @@ class TiledLayout < Layout
     @root = Node.new(dir: :lr)
   end
 
-  def update_geometry(geom)
-    # FIXME: Only do this if geom is actually different from @geom
-
-    @geom = geom.dup
-    # FIXME: This is to account for a bar, but we shouldn't just assume
-    # the height here
-    @geom.height -= 30
-
+  def update_geometry(geom = nil)
+    # Tile within the desktop's work area (monitor minus dock struts); fall back
+    # to whatever geometry we were handed if the desktop has no monitor yet.
+    @geom = (@desktop.work_area || geom).dup
     relayout if @root&.children&.any?
   end
 
@@ -46,7 +42,7 @@ class TiledLayout < Layout
   end
   
   def call(focus=nil)
-    current_geom = @desktop.geometry
+    current_geom = @desktop.work_area
     if @geom.width != current_geom.width || @geom.height != current_geom.height
       update_geometry(current_geom)
     end

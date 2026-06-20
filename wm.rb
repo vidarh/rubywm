@@ -64,6 +64,7 @@ class WindowManager
      end
 
      setup_ewmh
+     publish_workarea
   end
 
   # EWMH hints we actually honour. Advertised via _NET_SUPPORTED so toolkits
@@ -75,6 +76,7 @@ class WindowManager
     _NET_WM_DESKTOP _NET_WM_STATE _NET_WM_STATE_FULLSCREEN
     _NET_WM_WINDOW_TYPE _NET_WM_WINDOW_TYPE_DESKTOP
     _NET_WM_WINDOW_TYPE_DOCK _NET_WM_WINDOW_TYPE_DIALOG
+    _NET_WM_STRUT _NET_WM_STRUT_PARTIAL _NET_WORKAREA
   ].freeze
 
   # Advertise EWMH compliance: a persistent child window referenced by
@@ -269,8 +271,64 @@ class WindowManager
     @monitors.each {|m| m.active_desktop&.layout&.call(@focus) }
   end
 
-  # FIXME: Does not take into account panels
   def rootgeom           = (@rootgeom ||= root.get_geometry)
+
+  # --- Struts / work area (EWMH _NET_WM_STRUT_PARTIAL) ----------------------
+
+  def geometry(x, y, w, h)
+    X11::Form::Geometry.new.tap { |g| g.x = x; g.y = y; g.width = w; g.height = h }
+  end
+
+  def invalidate_struts = (@struts = nil)
+  def struts            = (@struts ||= read_struts)
+
+  # Reserved-edge specs from every top-level window advertising a strut. Each is
+  # the 12-element _NET_WM_STRUT_PARTIAL (a 4-element _NET_WM_STRUT is widened to
+  # span the whole screen).
+  def read_struts
+    sw, sh = rootgeom.width, rootgeom.height
+    root.query_tree.children.filter_map do |wid|
+      v = dpy.get_property(wid, :_NET_WM_STRUT_PARTIAL, :cardinal, length: 12)&.value
+      unless v.is_a?(Array) && v.length == 12
+        s = dpy.get_property(wid, :_NET_WM_STRUT, :cardinal, length: 4)&.value
+        next unless s.is_a?(Array) && s.length == 4
+        v = [s[0], s[1], s[2], s[3], 0, sh - 1, 0, sh - 1, 0, sw - 1, 0, sw - 1]
+      end
+      next if v[0, 4].all?(&:zero?)
+      v
+    end
+  rescue X11::Error => e
+    $logger.debug { "error reading struts: #{e.message}" }
+    []
+  end
+
+  def ranges_overlap?(a1, a2, b1, b2) = (a1 <= b2 && b1 <= a2)
+
+  # A monitor's usable rectangle: its geometry minus any struts whose reserved
+  # edge borders it.
+  def work_area(monitor)
+    return rootgeom if !monitor
+    sw, sh = rootgeom.width, rootgeom.height
+    x1, y1 = monitor.xoffset, monitor.yoffset
+    x2, y2 = monitor.xoffset + monitor.width, monitor.yoffset + monitor.height
+
+    struts.each do |s|
+      left, right, top, bottom = s[0], s[1], s[2], s[3]
+      y1 = [y1, top].max         if top    > 0 && ranges_overlap?(s[8],  s[9],  x1, x2 - 1)
+      y2 = [y2, sh - bottom].min if bottom > 0 && ranges_overlap?(s[10], s[11], x1, x2 - 1)
+      x1 = [x1, left].max        if left   > 0 && ranges_overlap?(s[4],  s[5],  y1, y2 - 1)
+      x2 = [x2, sw - right].min  if right  > 0 && ranges_overlap?(s[6],  s[7],  y1, y2 - 1)
+    end
+    geometry(x1, y1, x2 - x1, y2 - y1)
+  end
+
+  # _NET_WORKAREA is one rect per desktop; publish the primary monitor's usable
+  # area for each (a best-effort hint; EWMH has no per-monitor work area).
+  def publish_workarea
+    wa = work_area(@primary_monitor)
+    change_property(:_NET_WORKAREA, :cardinal, [wa.x, wa.y, wa.width, wa.height] * @desktops.length)
+  end
+
   def window(wid)
     return root if (wid == root.wid)
     return @windows[wid] if @windows[wid]
@@ -291,6 +349,21 @@ class WindowManager
     return w if w
     w = Window.new(self, wid)
 
+    # Docks (panels/bars) are managed but special: kept on every desktop (never
+    # tiled, floated, or focused), stacked above, keeping their own geometry, and
+    # reserving screen space via struts.
+    if w.dock?
+      attr = w.get_window_attributes rescue nil
+      return w if attr&.override_redirect
+      w.floating = true
+      w.mapped = (attr && attr.map_state != 0)
+      @windows[wid] = w
+      w.select_input(X11::Form::PropertyChangeMask)
+      update_client_list
+      invalidate_struts
+      return w
+    end
+
     # FIXME: At least some of these ought to "adopted" but set as
     # floating/non-layout so they stay on a single desktop.
     #
@@ -298,7 +371,6 @@ class WindowManager
       w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_NOTIFICATION) ||
       w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_POPUP_MENU) ||
       w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_MENU) ||
-      w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_DOCK) ||
       w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_TOOLTIP) ||
       w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_DIALOG) ||
       w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_SPLASH) ||
@@ -353,6 +425,16 @@ class WindowManager
       if w.desktop?
         w.resize_to_geom(w.desktop&.geometry || rootgeom)
         w.map   # Window#stack lowers desktop windows below everything else
+        next
+      end
+
+      # Docks keep their own geometry and reserve space; map, recompute the
+      # work area, and re-tile so windows avoid the reserved strut.
+      if w.dock?
+        w.map   # Window#stack raises docks
+        invalidate_struts
+        publish_workarea
+        update_layout
         next
       end
 
@@ -484,6 +566,8 @@ class WindowManager
   def destroy_window(wid)
     if @windows[wid]
       @windows.delete(wid)
+      invalidate_struts   # a dock may have gone; recompute reserved space
+      publish_workarea
       update_layout
       update_client_list
     end
@@ -527,7 +611,12 @@ class WindowManager
   end
   def on_property_notify(ev)
     name = dpy.get_atom_name(ev.atom) rescue nil
-    $logger.info("Property Notify: #{name}")
+    $logger.debug { "Property Notify: #{name}" }
+    if name == "_NET_WM_STRUT_PARTIAL" || name == "_NET_WM_STRUT"
+      invalidate_struts
+      publish_workarea
+      update_layout
+    end
   end
 
   def on_button_press(ev)

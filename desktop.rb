@@ -26,5 +26,7 @@ class Desktop
   end
 
   def geometry = (monitor&.geometry || @wm.rootgeom)
+  # Usable area for tiling: the monitor minus any dock struts.
+  def work_area = @wm.work_area(monitor)
   def update_layout = (active? && layout&.call(@wm.focus))
 end
