@@ -1,0 +1,74 @@
+#!/bin/sh
+#
+# Example .xinitrc for RubyWM.
+#
+# This is a reference, NOT a drop-in replacement — adjust paths to taste. It
+# folds in the session-plumbing fixes from docs/review-2026-06-13.md §G:
+#
+#   * Background everything that isn't instantaneous, so one slow/long-lived
+#     program can't stall the rest of startup (review §G1).
+#   * Tame the GTK file-picker delay, which is almost always a failing D-Bus /
+#     xdg-desktop-portal probe rather than the WM (review §G2).
+#
+# Logs go through `logger` (journal/syslog) so a misbehaving component doesn't
+# spam the tty.
+
+echo "Starting RubyWM session"
+
+# --- D-Bus / XDG environment --------------------------------------------------
+
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+
+# Give a desktop identity so portals/backends stop probing for one. Any stable
+# value works for a minimal WM.
+export XDG_CURRENT_DESKTOP=rubywm
+
+# Push the key variables into the D-Bus/systemd activation environment, so
+# services activated on the bus (portals, gvfs, etc.) don't start with a broken
+# environment and hang (review §G2.2).
+if command -v dbus-update-activation-environment >/dev/null 2>&1; then
+  dbus-update-activation-environment --systemd \
+    DISPLAY XAUTHORITY XDG_RUNTIME_DIR XDG_CURRENT_DESKTOP DBUS_SESSION_BUS_ADDRESS
+fi
+
+# File-picker speed-ups (review §G2):
+#  - Use GTK's in-process chooser instead of the xdg-desktop-portal one, which
+#    can stall ~25s on activation if no portal is running.
+#  - Skip the AT-SPI accessibility bus, which GTK otherwise waits on.
+export GTK_USE_PORTAL=0
+export NO_AT_BRIDGE=1
+export GTK_A11Y=none
+
+# --- Hotkeys ------------------------------------------------------------------
+
+(sxhkd 2>&1 | logger -t sxhkd) &
+
+# --- Window manager -----------------------------------------------------------
+
+(cd ~/Desktop/Projects/wm && ruby rubywm.rb 2>&1 | logger -t rubywm) &
+
+# --- Bars / desktop -----------------------------------------------------------
+
+# Desktop/monitor names for Rebar (sourced, not run).
+(cd ~/Desktop/Projects/Rebar && . ./names.txt) 2>&1 | logger -t rebar
+
+(cd ~/Desktop/Projects/Rebar && MONITOR=0 ruby rebar.rb 2>&1 | logger -t rebar) &
+(cd ~/Desktop/Projects/Rebar && MONITOR=1 ruby rebar.rb 2>&1 | logger -t rebar) &
+(~/bin/desktop 2>&1 | logger -t desktop) &
+
+# --- Autostart apps (all backgrounded; see review §G1) ------------------------
+
+(~/bin/todo 2>&1 | logger -t todo) &
+(randombg 2>&1 | logger -t randombg) &
+(compton 2>&1 | logger -t compton) &
+
+(GTK_THEME=Adwaita:dark nm-applet 2>&1 | logger -t nm-applet) &
+(GTK_THEME=Adwaita:dark pnmixer  2>&1 | logger -t pnmixer) &
+
+# --- Keep the session alive ---------------------------------------------------
+# startx exits when this script exits, so block on the backgrounded jobs.
+while true; do
+  wait
+  sleep 5
+done
