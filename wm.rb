@@ -242,13 +242,6 @@ class WindowManager
   def current_desktop    = desktops[current_desktop_id] || desktops[0]
   def root_id            = (@root_id ||= @dpy.screens.first.root)
   def root               = (@root ||=Window.new(self, root_id))
-  def layout
-    $logger.warn("Calling wm.layout almost certainly means this code path is not multi-monitor safe. FIXME.")
-    $logger.warn("Code that calls this should be converted to find the actual layout for the given window")
-    $logger.warn(caller[0..9].inspect)
-    current_desktop&.layout || @floating
-  end
-  
   def layout_for(w)
     if w.floating?
       # Ensure floating layout knows about the desktop
@@ -256,7 +249,7 @@ class WindowManager
       return @floating
     else
       desktop = w.desktop
-      current_layout = layout
+      current_layout = desktop&.layout || @floating
       
       # For tiled layout, make sure it's using current desktop's geometry
       if current_layout.is_a?(TiledLayout) && desktop&.monitor
@@ -770,10 +763,10 @@ class WindowManager
   def on_rwm_shift_direction(_,dir)
     # FIXME: Respect the window passed instead of doing it to @focus
     return if !@focus || @focus.special?
-    if node = layout.find(@focus)
+    if node = @focus.desktop&.layout&.find(@focus)
       node = node.parent if node.is_a?(Leaf)
       node.dir = node.dir == :lr ? :tb : :lr
-      current_desktop&.update_layout
+      @focus.desktop&.update_layout
     end
   end
 
@@ -783,7 +776,7 @@ class WindowManager
     # no matter what
     return if !@focus || @focus.special?
     # FIXME: Move to layout?
-    if node = layout.find(@focus)
+    if node = @focus.desktop&.layout&.find(@focus)
       node = node.parent if node.is_a?(Leaf)
       tmp = node.nodes[0]
       node.nodes[0] = node.nodes[1]
