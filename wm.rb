@@ -515,6 +515,10 @@ class WindowManager
     other = @monitors.find { |m| m != curr_monitor && m.active_desktop == target }
 
     current&.hide
+    # If the target was visible on another monitor, hide it first so that
+    # showing it on this monitor re-runs each window's monitor relocation
+    # (floating windows reposition on show, not via the layout).
+    target.hide if other
     curr_monitor.active_desktop = target
 
     if other
