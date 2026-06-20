@@ -344,6 +344,10 @@ class WindowManager
     yield(w) if w
   end
   
+  # Interned atom ids for Window::FLOAT_TYPES. Atoms are constant per session,
+  # so memoise once to avoid repeated round-trips on the classification path.
+  def float_type_atoms = (@float_type_atoms ||= Window::FLOAT_TYPES.map { dpy.atom(_1) })
+
   def update_client_list
     change_property(:_NET_CLIENT_LIST, :window, @windows.keys)
     update_client_list_stacking
@@ -381,22 +385,13 @@ class WindowManager
       return w
     end
 
-    # FIXME: At least some of these ought to "adopted" but set as
-    # floating/non-layout so they stay on a single desktop.
-    #
-    if w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_POPUP) ||
-      w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_NOTIFICATION) ||
-      w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_POPUP_MENU) ||
-      w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_MENU) ||
-      w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_TOOLTIP) ||
-      w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_DIALOG) ||
-      w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_SPLASH) ||
-      w.type == dpy.atom(:_NET_WM_WINDOW_TYPE_UTILITY)
-      w.floating = true
-      w.stack
-      return w
-    end
-    if w.desktop?
+    # Dialogs/utilities/splashes and desktop windows are managed like ordinary
+    # windows but never tiled: floated, kept on their own desktop, stacked by
+    # type. They fall through to the normal path so they gain a stable identity
+    # in @windows (preserving per-window state), a desktop assignment, and
+    # client-list membership. Truly transient surfaces (menus/tooltips/popups)
+    # are override-redirect and are rejected just below, so they never tile.
+    if w.floaty_type? || w.desktop?
       w.floating = true
     end
     attr = w.get_window_attributes rescue nil

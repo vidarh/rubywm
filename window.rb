@@ -168,6 +168,18 @@ class Window < X11::Window
   def dock?    = (type == dpy.atom(:_NET_WM_WINDOW_TYPE_DOCK))
   def special? = (desktop? | dock?)
 
+  # Window types we never tile: floated, stacked above, kept on a single
+  # desktop. The corresponding atom ids are interned once on the WM (see
+  # WindowManager#float_type_atoms) so this stays cheap on hot paths.
+  FLOAT_TYPES = %i[
+    _NET_WM_WINDOW_TYPE_DIALOG _NET_WM_WINDOW_TYPE_UTILITY
+    _NET_WM_WINDOW_TYPE_SPLASH _NET_WM_WINDOW_TYPE_TOOLTIP
+    _NET_WM_WINDOW_TYPE_MENU   _NET_WM_WINDOW_TYPE_POPUP_MENU
+    _NET_WM_WINDOW_TYPE_POPUP  _NET_WM_WINDOW_TYPE_NOTIFICATION
+  ].freeze
+
+  def floaty_type? = @wm.float_type_atoms.include?(type)
+
   # FIXME: Ensure any "desktop" windows on this desktop are moved *below*
   def lower =  configure(stack_mode: :below)
   def raise = (configure(stack_mode: :above) unless desktop?)
@@ -175,13 +187,7 @@ class Window < X11::Window
   # Adjust stacking based on type. This is incomplete
   def stack
     return lower if desktop?
-    # FIXME: This is incomplete. Also may want to add a separate
-    # classification method and cache result.
-    return self.raise if dock? ||
-         type == dpy.atom(:_NET_WM_WINDOW_TYPE_TOOLTIP) ||
-         type == dpy.atom(:_NET_WM_WINDOW_TYPE_DIALOG) ||
-         type == dpy.atom(:_NET_WM_WINDOW_TYPE_SPLASH) ||
-         type == dpy.atom(:_NET_WM_WINDOW_TYPE_UTILITY)
+    return self.raise if dock? || floaty_type?
   end
     
   def maximize = (set_border_width(0) and resize_to_geom(desktop&.geometry || @wm.rootgeom, stack_mode: :above))
