@@ -66,6 +66,15 @@ class WindowManager
      setup_ewmh
      publish_workarea
      publish_desktop_names
+     publish_desktop_window_host
+  end
+
+  # Publish which desktop hosts desktop-type windows (config `desktop: true`),
+  # as a custom _RWM_DESKTOP_WINDOW_DESKTOP cardinal on the root, so the desktop
+  # client (Dwin) reads it instead of hardcoding a desktop number.
+  def publish_desktop_window_host
+    return unless @desktop_window_desktop
+    change_property(:_RWM_DESKTOP_WINDOW_DESKTOP, :cardinal, @desktop_window_desktop)
   end
 
   # _NET_DESKTOP_NAMES: the WM owns desktop identity, so publish the names from
@@ -221,6 +230,12 @@ class WindowManager
     @desktops ||= num_desktops.times.map do |num|
       c = config.dig(:desktops, num+1)
       name = c&.dig(:name) || (num+1).to_s
+
+      # The desktop flagged `desktop: true` hosts desktop-type windows (the
+      # icon/backdrop surface). We publish its id so that client can read it
+      # instead of hardcoding a desktop number (see #publish_desktop_window_host).
+      @desktop_window_desktop = num if c&.dig(:desktop)
+
       Desktop.new(self, num, name).tap do |d|
 
         # FIXME: Check EWMH hints first.
@@ -231,7 +246,7 @@ class WindowManager
           monitor = @monitors[num]
           monitor.active_desktop = d
         end
-        
+
         if c&.dig(:layout) == "floating"
           # FIXME: Should be ok to set this to @floating
           # but some logic checks for a nil layout
