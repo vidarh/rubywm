@@ -83,6 +83,14 @@ loop do
     next
   end
 
+  # next_packet returns nil when the X connection's read queue is closed, i.e.
+  # the server went away. Exit cleanly instead of spinning on dispatch(nil)
+  # (which previously busy-looped at 100% CPU and left orphaned processes).
+  if ev.nil?
+    $logger.info("X connection closed; exiting")
+    break
+  end
+
   $logger.debug("Event: #{ev.inspect}")
   begin
     d.(ev.class, ev)
