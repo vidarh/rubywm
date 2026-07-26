@@ -145,10 +145,16 @@ class Window < X11::Window
     hide if @desktop&.active?
     @desktop = d
     d&.active? ? show : hide
-    
-    if d && !d.is_a?(Symbol)
-      change_property(:replace, :_NET_WM_DESKTOP, :cardinal, 32, [d.id,0,0,0])
-    end
+    publish_desktop
+  end
+
+  # Desktop indices are EWMH's public identity and may change when a dynamic
+  # desktop is removed. Republish without otherwise moving or relaying out the
+  # window.
+  def publish_desktop
+    return if !@desktop || @desktop.is_a?(Symbol)
+    change_property(:replace, :_NET_WM_DESKTOP, :cardinal, 32,
+                    [@desktop.id, 0, 0, 0])
   end
 
   def inspect

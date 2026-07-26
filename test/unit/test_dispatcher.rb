@@ -29,6 +29,13 @@ class TestDispatcher < Minitest::Test
   def test_rwm_atom_to_handler
     assert_equal :on_rwm_move_to_monitor, @d.name_to_event("_RWM_MOVE_TO_MONITOR")
     assert_equal :on_rwm_focus,           @d.name_to_event("_RWM_FOCUS")
+    assert_equal :on_rwm_ensure_desktop,  @d.name_to_event("_RWM_ENSURE_DESKTOP")
+    assert_equal :on_rwm_view_desktop,    @d.name_to_event("_RWM_VIEW_DESKTOP")
+    assert_equal :on_rwm_view_group,      @d.name_to_event("_RWM_VIEW_GROUP")
+    assert_equal :on_rwm_send_to_group,   @d.name_to_event("_RWM_SEND_TO_GROUP")
+    assert_equal :on_rwm_add_group_view,  @d.name_to_event("_RWM_ADD_GROUP_VIEW")
+    assert_equal :on_rwm_remove_desktop,  @d.name_to_event("_RWM_REMOVE_DESKTOP")
+    assert_equal :on_rwm_move_desktop,    @d.name_to_event("_RWM_MOVE_DESKTOP")
   end
 
   def test_registered_block_takes_priority

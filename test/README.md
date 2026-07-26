@@ -38,6 +38,7 @@ wmh props                                     # root EWMH properties
 wmh tree                                      # window tree with geometries
 wmh log [-f]                                  # WM log (stdout pp + stderr $logger)
 wmh status                                    # display, backend, pids
+wmh restart                                   # restart only RubyWM; preserve X root state
 wmh down                                      # tear down + clean up
 ```
 

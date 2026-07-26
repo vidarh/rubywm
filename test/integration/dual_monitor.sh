@@ -22,6 +22,10 @@ $WMH down >/dev/null 2>&1 || true
 $WMH up --dual --geom 800x600 >/dev/null 2>&1 || { echo "FAIL - dual harness failed to start"; exit 1; }
 D=$($WMH status | awk '/display/{print $3}')
 mon() { DISPLAY=$D xprop -root "_NET_CURRENT_DESKTOP_MONITOR_$1" 2>/dev/null | grep -oE '[0-9]+$'; }
+visible() {
+  DISPLAY=$D xprop -root _RWM_VISIBLE_DESKTOPS 2>/dev/null |
+    sed -n 's/.* = //p' | tr -d ' '
+}
 
 # Startup: monitor 0 shows desktop 0, monitor 1 shows desktop 1.
 # Put the pointer on monitor 0 and switch it to desktop 1 (live on monitor 1):
@@ -31,6 +35,7 @@ $WMH msg _NET_CURRENT_DESKTOP 1 >/dev/null 2>&1; sleep 0.5
 
 check "monitor 0 now shows desktop 1" "$(mon 0)" "1"
 check "monitor 1 swapped to desktop 0" "$(mon 1)" "0"
+check "custom visible array follows the swap" "$(visible)" "1,0"
 
 # A floating window must follow its desktop when that desktop moves to another
 # monitor (regression: floating windows reposition on show, so the desktop must
@@ -59,6 +64,15 @@ nw=$($WMH tree 2>/dev/null | awk '/xterm/{print $1; exit}')
 nx=$(DISPLAY=$D xwininfo -id "$nw" 2>/dev/null | awk '/Absolute upper-left X/{print $NF}')
 check "window requesting a monitor-1 position opens on monitor 0" "$(range "$nw")" "left"
 check "...at the same monitor-relative offset (1000-800 -> 200)"   "$nx"           "200"
+
+# A newly ensured project can be addressed directly to the other monitor
+# without changing the pointer-selected monitor.
+DISPLAY=$D bundle exec ruby rwmctl.rb ensure project:dual \
+  --name Dual --mode floating >/dev/null
+DISPLAY=$D bundle exec ruby rwmctl.rb view project:dual --monitor 1
+sleep 0.3
+check "project leases the first slot unused on either monitor" "$(mon 1)" "2"
+check "visible array includes the leased project" "$(visible)" "9,2"
 
 if [ "$fail" = 0 ]; then echo "PASS"; else echo "FAILURES"; fi
 exit $fail

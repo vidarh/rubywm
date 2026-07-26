@@ -129,6 +129,147 @@ this is in development, I'm not going to do that because most stuff on
 my desktop can survive my WM crashing and being restarted just fine,
 as it should be, but will obviously get killed if the X session dies.
 
+## Dynamic project desktops
+
+`desktops.number` is the initial desktop count, not a maximum. Every desktop
+still has an ordinary contiguous EWMH index, while RubyWM also publishes a
+stable string key that scripts can retain when indices change.
+
+Numbers in that initial set are stable high-level addresses. The first project
+in a group may lease the first eligible empty address; further projects in the
+same group are appended as ordinary overflow EWMH desktops and appear only in
+that group's project strip. They do not consume more numeric addresses. Thus,
+if Coding owns address 3 and its last-used project has backing index 11,
+`Super+3` enters that project while `Super+5` still opens empty desktop 5.
+
+The bundled semantic client accepts stable keys. `~/bin/rwmctl` is a symlink
+to it, so the shorter form works from any directory:
+
+```sh
+rwmctl list
+rwmctl current --json
+rwmctl current --field pwd
+
+rwmctl ensure project:rubywm \
+  --name RubyWM \
+  --pwd "$HOME/Desktop/Projects/wm" \
+  --group Coding \
+  --mode tiled \
+  --view
+
+rwmctl edit project:rubywm \
+  --name RubyWM \
+  --pwd "$HOME/Desktop/Projects/wm" \
+  --group Coding
+
+rwmctl view workbench
+rwmctl group 3
+rwmctl group next
+rwmctl view next
+rwmctl move Coding --first
+rwmctl move Novelator --to 4
+rwmctl remove project:rubywm
+```
+
+`ensure` is idempotent: it reports whether it created the desktop, so a later
+project launcher can launch a manifest only on first creation. Supplying a
+name, project working directory (`--pwd`, with `--project` retained as an
+alias), or group for an existing key refreshes that metadata without treating
+it as newly created. `edit` accepts the same metadata options but refuses a
+missing stable key, making it safer for interactive changes and scripts where
+a typo must not create a new desktop. `--clear-pwd` and `--clear-group` remove
+those values. Relative `--pwd` values are expanded when `rwmctl` runs, so
+`rwmctl edit current --pwd .` stores the caller's absolute directory.
+
+`current` reports the desktop on the monitor under the pointer. `--json`
+returns all of its settings; `--field key|name|pwd|group|mode|number` prints one
+shell-friendly value. The `~/bin/defdir` compatibility helper uses
+`rwmctl current --field pwd`, so the existing `Super+Return` → `bin/term` path
+starts RubyTerm in the active project's directory. An explicit
+`term --dir DIRECTORY` still overrides that default.
+
+`rwmctl` always activates the RubyWM repository's own bundle. It ignores a
+Gemfile in the caller's current directory and re-execs outside an inherited
+foreign `bundle exec` environment, so these commands are safe to run directly
+from the project being configured.
+
+`edit current` targets that same pointer-monitor desktop. It can claim a
+currently visible empty numeric placeholder in place and give it stable
+identity without allocating a different address. For example, after
+`Super+5`:
+
+```sh
+rwmctl edit current \
+  --key project:scratch \
+  --name Scratch \
+  --group Experiments \
+  --pwd "$HOME/Desktop/Projects/scratch"
+```
+
+Desktop 5 is now the `Experiments` group address and Rebar shows its top
+project strip. `--key` re-keys only the current EWMH desktop/view.
+`--group NAME` assigns only that view; `--rekey-group NAME` renames the current
+group across every one of its views. An empty view can also change between
+`--mode tiled` and `--mode floating`; a non-empty view is protected.
+
+The top project strip has a `+` control. It appends and selects an empty tiled
+view in the current group, inheriting the group's working directory. Its
+temporary name is `New view`; finish describing it in place with, for example:
+
+```sh
+rwmctl edit current --key project:scratch:tools --name Tools
+```
+
+A non-empty, configured, or pinned desktop is protected.
+`remove --force --fallback KEY` moves clients before removal and republishes
+their `_NET_WM_DESKTOP` indices.
+`group next|previous|KEY` cycles the same high-level contexts Rebar displays.
+`view next|previous` cycles projects/views inside the current context. Both
+accept `--monitor INDEX`, making them suitable for `sxhkd` bindings even after
+the initial numeric slots are exhausted. RubyWM keeps a per-monitor MRU
+history, so returning to a group selects the project used there most recently;
+history follows the stable desktop object when it is renumbered.
+
+`move KEY|GROUP --first` renumbers a dynamic project/group into the first empty,
+non-visible, non-reserved initial slot. `move KEY|GROUP --to NUMBER` selects an
+explicit one-based Rebar number. Windows, layout, visible-monitor ownership,
+and stable metadata move atomically with the desktop. Moving appended desktops
+out of the tail also trims trailing empty placeholders. A move is rejected if
+it would give a group that already has a numeric address a second one.
+
+`rwmctl.rb count NUMBER` sends the standard `_NET_NUMBER_OF_DESKTOPS` request.
+Count expansion creates reusable placeholders; shrinking is accepted only when
+the removed tail consists entirely of empty, non-visible placeholders.
+
+Configured desktops can opt into the same identity and metadata:
+
+```yaml
+desktops:
+  number: 10
+  10:
+    key: workbench
+    name: Workbench
+    group: System
+    group_root: true
+    layout: floating
+    desktop: true
+    pinned: true
+```
+
+The root properties `_RWM_DESKTOP_KEYS`, `_RWM_DESKTOP_PROJECTS`,
+`_RWM_DESKTOP_GROUPS`, `_RWM_DESKTOP_MODES`, and `_RWM_DESKTOP_FLAGS` are
+aligned with `_NET_NUMBER_OF_DESKTOPS`. `_RWM_VISIBLE_DESKTOPS` contains one
+desktop index per monitor. `_RWM_DESKTOP_CLIENT_COUNTS` contains the number of
+managed windows assigned to each desktop, allowing a pager to hide only slots
+that are genuinely empty. `_RWM_DESKTOP_HISTORY` contains one fixed-width MRU
+row per monitor. `_RWM_DESKTOP_GENERATION` is written last after a coherent
+update. These properties survive a WM-only restart in the same X session and
+are restored before existing clients are adopted.
+
+Project manifests and launch-on-create policy are intentionally not in the WM
+yet. See [the project-screen design](docs/amiga-project-screens.md) for that
+next layer, Rebar overflow/grouping, stage layouts, and per-window tabs.
+
 ## Using with sxhkd
 
 This is my related integration with sxhkd from my sxhkd config, but any
@@ -161,13 +302,14 @@ app that supports sending XClientMessage events can work:
     super + F2
     	/home/vidarh/bin/xclimsg -mpw focused _NET_RESTACK_WINDOW 2 0 1
     
-    # Focus desktop
+    # Select the high-level group at this Rebar address. Do not send
+    # _NET_CURRENT_DESKTOP here: that exposes project backing desktops.
     super + {1-9,0}
-    	/home/vidarh/bin/xclimsg -mp _NET_CURRENT_DESKTOP {0-8,9}
+        /home/vidarh/Desktop/Projects/wm/climsg.rb _RWM_VIEW_GROUP {1-9,10}
     
-    # Move to desktop
+    # Move the focused window to the last-used project in this group.
     super + shift + {1-9,0}
-    	/home/vidarh/bin/xclimsg -mpw focused _NET_WM_DESKTOP {0-8,9}
+        /home/vidarh/Desktop/Projects/wm/climsg.rb -w focused _RWM_SEND_TO_GROUP {1-9,10}
     
     # Assign desktop to a specific monitor (example for monitor "left")
     super + alt + 1
@@ -208,6 +350,18 @@ conventional but not yet load-bearing — see the `FIXME`s in `wm.rb`).
 | `_RWM_SHIFT_DIRECTION` | *(ignored)* | Toggle the split direction (horizontal ↔ vertical) of the focused window's parent node. |
 | `_RWM_SWAP_NODES` | *(ignored)* | Swap the two children of the focused window's parent node. |
 | `_RWM_MOVE_TO_MONITOR` | `next`/`previous` | Move the focused window to the desktop shown on the adjacent monitor. |
+| `_RWM_VIEW_DESKTOP` | desktop index | Show the desktop on the monitor in `data[1]`; `0xffffffff` means the active monitor. |
+| `_RWM_VIEW_GROUP` | one-based group address | Show that context's MRU project, or the empty placeholder at an unused numeric address; `data[1]` is monitor+1, or `0` for active. |
+| `_RWM_SEND_TO_GROUP` | one-based group address | Move the message/focused window to that context's MRU project, or to the empty placeholder at an unused address; `data[1]` uses the same monitor encoding. |
+| `_RWM_ADD_GROUP_VIEW` | monitor+1, or `0` for active | Append and select an empty tiled view in that monitor's current group. |
+| `_RWM_REMOVE_DESKTOP` | desktop index | Remove it; `data[1]` bit 0 forces and `data[2]` is the fallback index or `0xffffffff`. |
+| `_RWM_ENSURE_DESKTOP` | protocol version (`1`) | Find or create the stable key described by the requester window's `_RWM_DESKTOP_SPEC`. |
+| `_RWM_MOVE_DESKTOP` | protocol version (`1`) | Atomically renumber the desktop in `data[1]` into `data[2]`; `0xffffffff` selects the first reusable slot. |
+
+`_RWM_ENSURE_DESKTOP` uses the ClientMessage's window field as a temporary
+request window. Its `_RWM_DESKTOP_SPEC` is UTF-8 JSON; RubyWM writes a UTF-8
+JSON `_RWM_DESKTOP_REPLY` on the same window. `rwmctl.rb` owns these mechanics
+so keybindings and future project tooling do not need to.
 
 `_RWM_SET_MONITOR` appears in the example bindings above but is **not yet
 implemented** — sending it currently has no effect.

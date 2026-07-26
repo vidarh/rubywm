@@ -23,6 +23,7 @@
 #   wmh tree                       dump the window tree (xwininfo)
 #   wmh log [-f]                   show (or follow) the rubywm log
 #   wmh status                     show display + pids
+#   wmh restart                    restart only RubyWM, preserving X root state
 #   wmh down                       tear everything down and clean up
 #
 set -uo pipefail
@@ -59,6 +60,29 @@ hdisp() { cat "$STATE/display" 2>/dev/null || die "no harness running (use 'wmh 
 
 # --- lifecycle ---------------------------------------------------------------
 
+start_rubywm() {
+  local d="$1"
+  info "starting rubywm on $d"
+  # Force Ruby IO sync so stdout (pp/p) is captured even if the WM is killed.
+  # (stdbuf can't help here — Ruby manages its own buffers, not glibc's.)
+  # $logger already writes unbuffered to stderr regardless.
+  ( cd "$REPO" && DISPLAY="$d" exec ruby -e 'STDOUT.sync=STDERR.sync=true; load "./rubywm.rb"' ) \
+    >"$STATE/rubywm.log" 2>&1 &
+  echo $! > "$STATE/rubywm.pid"
+
+  local i
+  for i in $(seq 1 50); do
+    DISPLAY="$d" xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null |
+      grep -q 'window id' && break
+    sleep 0.1
+  done
+  DISPLAY="$d" xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null |
+    grep -q 'window id' || {
+      cat "$STATE/rubywm.log" >&2
+      die "rubywm failed to start"
+    }
+}
+
 cmd_up() {
   local dual=0 watch=0 geom="1280x800"
   while [ $# -gt 0 ]; do
@@ -90,7 +114,9 @@ cmd_up() {
   [ "$watch" = 1 ] && label="$label watch"
   info "starting $backend on $d ($label [$backend])"
   if [ "$backend" = xvfb ]; then
-    Xvfb "$d" -screen 0 "${geom}x24" +extension XINERAMA -nolisten tcp \
+    # Keep root properties across a WM-only restart even when the harness has
+    # no other X clients. A real session naturally has clients connected.
+    Xvfb "$d" -screen 0 "${geom}x24" +extension XINERAMA -nolisten tcp -noreset \
       >"$STATE/server.log" 2>&1 &
   else
     local screens=( -screen "$geom" )
@@ -115,21 +141,23 @@ cmd_up() {
 
   echo "$d" > "$STATE/display"
 
-  info "starting rubywm on $d"
-  # Force Ruby IO sync so stdout (pp/p) is captured even if the WM is killed.
-  # (stdbuf can't help here — Ruby manages its own buffers, not glibc's.)
-  # $logger already writes unbuffered to stderr regardless.
-  ( cd "$REPO" && DISPLAY="$d" exec ruby -e 'STDOUT.sync=STDERR.sync=true; load "./rubywm.rb"' ) \
-    >"$STATE/rubywm.log" 2>&1 &
-  echo $! > "$STATE/rubywm.pid"
-
-  # wait for the WM to advertise itself (number of desktops appears)
-  for i in $(seq 1 50); do
-    DISPLAY="$d" xprop -root _NET_NUMBER_OF_DESKTOPS 2>/dev/null | grep -q '=' && break
-    sleep 0.1
-  done
+  start_rubywm "$d"
   info "up on $d ($backend pid $(cat "$STATE/server.pid"), rubywm pid $(cat "$STATE/rubywm.pid"))"
   cmd_props
+}
+
+cmd_restart() {
+  local d; d="$(hdisp)"
+  if [ -f "$STATE/rubywm.pid" ]; then
+    kill "$(cat "$STATE/rubywm.pid")" 2>/dev/null || true
+    sleep 0.2
+    kill -9 "$(cat "$STATE/rubywm.pid")" 2>/dev/null || true
+  fi
+  # The desktop metadata intentionally remains on the root. Remove only the
+  # readiness marker so start_rubywm waits for the new process.
+  DISPLAY="$d" xprop -root -remove _NET_SUPPORTING_WM_CHECK >/dev/null 2>&1
+  start_rubywm "$d"
+  info "restarted rubywm on $d (pid $(cat "$STATE/rubywm.pid"))"
 }
 
 cmd_down() {
@@ -193,7 +221,11 @@ cmd_props() {
   DISPLAY="$d" xprop -root \
     _NET_SUPPORTING_WM_CHECK _NET_SUPPORTED _NET_NUMBER_OF_DESKTOPS \
     _NET_CURRENT_DESKTOP _NET_ACTIVE_WINDOW _NET_CLIENT_LIST _NET_DESKTOP_NAMES \
-    _NET_WORKAREA 2>/dev/null
+    _NET_DESKTOP_GEOMETRY _NET_DESKTOP_VIEWPORT _NET_WORKAREA \
+    _RWM_DESKTOP_KEYS _RWM_DESKTOP_PROJECTS _RWM_DESKTOP_GROUPS \
+    _RWM_DESKTOP_MODES _RWM_DESKTOP_FLAGS _RWM_DESKTOP_CLIENT_COUNTS \
+    _RWM_VISIBLE_DESKTOPS _RWM_DESKTOP_HISTORY \
+    _RWM_DESKTOP_GENERATION 2>/dev/null
 }
 
 cmd_tree()   { local d; d="$(hdisp)"; DISPLAY="$d" xwininfo -root -tree -int; }
@@ -224,6 +256,7 @@ case "$sub" in
   props)  cmd_props "$@" ;;
   tree)   cmd_tree "$@" ;;
   status) cmd_status "$@" ;;
+  restart) cmd_restart "$@" ;;
   log)    cmd_log "$@" ;;
   *) sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

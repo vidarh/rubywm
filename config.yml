@@ -14,5 +14,10 @@ desktops:
       - iclass: "todo-done"
       - iclass: "todo-note"
   10:
+    key: workbench
+    name: Workbench
+    group: System
+    group_root: true
     layout: floating
     desktop: true
+    pinned: true

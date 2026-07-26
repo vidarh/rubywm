@@ -45,7 +45,12 @@ Thread.abort_on_exception = true
 config = YAML.load_file(__dir__ + "/config.yml", symbolize_names: true)
 
 dpy = X11::Display.new
-$wm = WindowManager.new(dpy, config)
+begin
+  $wm = WindowManager.new(dpy, config)
+rescue WindowManager::OwnershipError => e
+  $logger.fatal(e.message)
+  exit 1
+end
 
 # FIXME: This can also go into the WindowManager class
 
@@ -75,7 +80,7 @@ end
 loop do
   ev = nil
   begin
-    ev = dpy.next_packet
+    ev = $wm.next_packet
   rescue Interrupt
     raise
   rescue Exception => e

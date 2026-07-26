@@ -1,9 +1,28 @@
 
 require_relative 'floating'
 require_relative 'monitor'
+require_relative 'desktop_navigation'
+require 'json'
 
 class WindowManager
   attr_reader :dpy, :desktops, :windows, :focus, :monitors
+
+  class OwnershipError < StandardError; end
+
+  UINT32_MAX = 0xffffffff
+  DESKTOP_PROTOCOL_VERSION = 1
+  REMOVE_FORCE = 1 << 0
+  ROOT_EVENT_MASK = (
+    X11::Form::SubstructureNotifyMask |
+    X11::Form::SubstructureRedirectMask |
+    X11::Form::StructureNotifyMask |
+    X11::Form::EnterWindowMask |
+    X11::Form::LeaveWindowMask |
+    X11::Form::ButtonPressMask |
+    X11::Form::ExposureMask |
+    X11::Form::KeyPressMask |
+    X11::Form::FocusChangeMask
+  ).freeze
 
   def inspect = "<WindowManager>"
 
@@ -11,13 +30,15 @@ class WindowManager
     @dpy = dpy
     @windows = {}
     @monitors = []
+    @startup_packets = []
+    claim_window_manager!
+    snapshot = read_desktop_snapshot
+    @desktop_generation = snapshot&.dig(:generation).to_i
 
     @border_normal = 0x88666666
     @border_focus  = 0xffff66ff
 
-    process_config(config)
-    
-    change_property(:_NET_NUMBER_OF_DESKTOPS, :cardinal, @desktops.count)
+    process_config(config, snapshot)
 
     mask = X11::Form::ButtonPressMask|X11::Form::ButtonReleaseMask|X11::Form::PointerMotionMask
     # Grab Super+button1/3 (move/resize), ignoring the lock modifiers
@@ -29,18 +50,6 @@ class WindowManager
       end
     end
 
-    eventmask = (X11::Form::SubstructureNotifyMask |
-       X11::Form::SubstructureRedirectMask |
-       X11::Form::StructureNotifyMask      |
-       X11::Form::EnterWindowMask          |
-       X11::Form::LeaveWindowMask          |
-       X11::Form::ButtonPressMask          |
-       X11::Form::ExposureMask             |
-       X11::Form::KeyPressMask             |
-       X11::Form::FocusChangeMask
-     )
-
-     root.select_input(eventmask)
      at_exit { root.set_input_focus(:parent) }
 
      children = root.query_tree.children
@@ -64,9 +73,39 @@ class WindowManager
      end
 
      setup_ewmh
-     publish_workarea
-     publish_desktop_names
-     publish_desktop_window_host
+     @desktop_state_ready = true
+     publish_desktop_state
+  end
+
+  # SubstructureRedirectMask may only be selected by one X client. pure-x11
+  # queues errors from void requests asynchronously, so follow the selection
+  # with a synchronous request, then inspect the packets that preceded its
+  # reply. Without this barrier a second RubyWM can appear to start, overwrite
+  # EWMH state, and still leave the old process handling all WM commands.
+  def claim_window_manager!
+    root.select_input(ROOT_EVENT_MASK)
+    @dpy.get_input_focus
+
+    queued = []
+    queued << @dpy.next_packet while @dpy.peek_packet
+    ownership_error = queued.find do |packet|
+      packet.is_a?(X11::Form::Error) &&
+        packet.code == 10 && # BadAccess
+        packet.major_opcode == 2 && # ChangeWindowAttributes
+        packet.bad_resource_id == root_id
+    end
+    if ownership_error
+      raise OwnershipError,
+            "another window manager already owns display #{ENV.fetch("DISPLAY", ":0")}"
+    end
+
+    protocol_error = queued.find { _1.is_a?(X11::Form::Error) }
+    raise X11::Error.new(protocol_error) if protocol_error
+    @startup_packets.concat(queued)
+  end
+
+  def next_packet
+    @startup_packets.empty? ? @dpy.next_packet : @startup_packets.shift
   end
 
   # Publish which desktop hosts desktop-type windows (config `desktop: true`),
@@ -74,16 +113,80 @@ class WindowManager
   # client (Dwin) reads it instead of hardcoding a desktop number.
   def publish_desktop_window_host
     return unless @desktop_window_desktop
-    change_property(:_RWM_DESKTOP_WINDOW_DESKTOP, :cardinal, @desktop_window_desktop)
+    change_property(:_RWM_DESKTOP_WINDOW_DESKTOP, :cardinal,
+                    @desktop_window_desktop.id)
   end
 
-  # _NET_DESKTOP_NAMES: the WM owns desktop identity, so publish the names from
-  # config (UTF-8, NUL-separated and NUL-terminated) for pagers/docks to read.
-  def publish_desktop_names
-    bytes = (@desktops.map(&:name).join("\0") + "\0").bytes
-    root.change_property(:replace, :_NET_DESKTOP_NAMES, dpy.atom(:UTF8_STRING), 8, bytes)
+  def publish_utf8_list(atom, values)
+    bytes = (values.map { _1.to_s }.join("\0") + "\0").bytes
+    root.change_property(:replace, atom, dpy.atom(:UTF8_STRING), 8, bytes)
   rescue X11::Error => e
-    $logger.debug { "error publishing _NET_DESKTOP_NAMES: #{e.message}" }
+    $logger.debug { "error publishing #{atom}: #{e.message}" }
+  end
+
+  # Publish the standard EWMH view and the aligned RubyWM metadata arrays as one
+  # logical snapshot. _RWM_DESKTOP_GENERATION is written last so readers can
+  # detect an update that crossed multiple X properties.
+  def publish_desktop_state
+    change_property(:_NET_NUMBER_OF_DESKTOPS, :cardinal, @desktops.length)
+    publish_utf8_list(:_NET_DESKTOP_NAMES, @desktops.map(&:name))
+    current = @desktops[@current_desktop_id] ||
+              @primary_monitor&.active_desktop || @desktops.first
+    @current_desktop_id = current&.id || 0
+    change_property(:_NET_CURRENT_DESKTOP, :cardinal, @current_desktop_id)
+    @monitors.each do |monitor|
+      next unless monitor.active_desktop
+      change_property("_NET_CURRENT_DESKTOP_MONITOR_#{monitor.id}".to_sym,
+                      :cardinal, monitor.active_desktop.id)
+    end
+
+    geom = rootgeom
+    change_property(:_NET_DESKTOP_GEOMETRY, :cardinal,
+                    [geom.width, geom.height])
+    change_property(:_NET_DESKTOP_VIEWPORT, :cardinal,
+                    [0, 0] * @desktops.length)
+    publish_workarea
+
+    publish_utf8_list(:_RWM_DESKTOP_KEYS, @desktops.map(&:key))
+    publish_utf8_list(:_RWM_DESKTOP_PROJECTS,
+                      @desktops.map { _1.project || "" })
+    publish_utf8_list(:_RWM_DESKTOP_GROUPS,
+                      @desktops.map { _1.group || "" })
+    change_property(:_RWM_DESKTOP_MODES, :cardinal,
+                    @desktops.map(&:mode_code))
+    change_property(:_RWM_DESKTOP_FLAGS, :cardinal,
+                    @desktops.map(&:flags))
+    change_property(:_RWM_DESKTOP_CLIENT_COUNTS, :cardinal,
+                    desktop_client_counts)
+    publish_desktop_window_host
+    publish_visible_desktops
+    publish_desktop_history
+    publish_desktop_generation
+  end
+
+  def desktop_client_counts
+    @desktops.map { |desktop| desktop.children.length }
+  end
+
+  # Occupancy changes independently of desktop metadata when clients are
+  # opened, closed, or moved. Publish the aligned counts first and generation
+  # last so Rebar can update without polling every client window.
+  def publish_desktop_occupancy
+    return unless @desktop_state_ready
+    change_property(:_RWM_DESKTOP_CLIENT_COUNTS, :cardinal,
+                    desktop_client_counts)
+    publish_desktop_generation
+  end
+
+  def publish_visible_desktops
+    change_property(:_RWM_VISIBLE_DESKTOPS, :cardinal,
+                    @monitors.map { _1.active_desktop&.id || UINT32_MAX })
+  end
+
+  def publish_desktop_generation
+    @desktop_generation = (@desktop_generation.to_i + 1) & UINT32_MAX
+    change_property(:_RWM_DESKTOP_GENERATION, :cardinal,
+                    @desktop_generation)
   end
 
   # EWMH hints we actually honour. Advertised via _NET_SUPPORTED so toolkits
@@ -98,6 +201,7 @@ class WindowManager
     _NET_WM_WINDOW_TYPE_DOCK _NET_WM_WINDOW_TYPE_DIALOG
     _NET_WM_STRUT _NET_WM_STRUT_PARTIAL _NET_WORKAREA
     _NET_CLIENT_LIST_STACKING _NET_DESKTOP_NAMES
+    _NET_DESKTOP_GEOMETRY _NET_DESKTOP_VIEWPORT
   ].freeze
 
   # Advertise EWMH compliance: a persistent child window referenced by
@@ -119,7 +223,13 @@ class WindowManager
   def set_current_desktop(desktop, monitor = active_monitor)
     @current_desktop_id = desktop
     change_property(:_NET_CURRENT_DESKTOP, :cardinal, desktop)
-    change_property("_NET_CURRENT_DESKTOP_MONITOR_#{monitor.id}".to_sym, :cardinal, desktop)
+    if monitor
+      change_property("_NET_CURRENT_DESKTOP_MONITOR_#{monitor.id}".to_sym,
+                      :cardinal, desktop)
+    end
+    publish_visible_desktops
+    publish_desktop_history
+    publish_desktop_generation
   end
   
   def process_node_child(spec, n)
@@ -220,44 +330,803 @@ class WindowManager
   # I prefer the bspwm approach of externalising it, because
   # I need/want an API to change it dynamically anyway, so
   # this is likely to change.
-  def process_config(config)
+  def root_cardinals(atom, length: 1024)
+    value = @dpy.get_property(root_id, atom, :cardinal,
+                              length: length)&.value
+    value.nil? ? [] : Array(value)
+  rescue X11::Error
+    []
+  end
+
+  def root_utf8_list(atom)
+    value = @dpy.get_property(root_id, atom, dpy.atom(:UTF8_STRING),
+                              length: 16_384)&.value
+    return [] if value.nil?
+    values = value.to_s.split("\0", -1)
+    values.pop if values.last == ""
+    values
+  rescue X11::Error
+    []
+  end
+
+  # A RubyWM-owned root snapshot survives a WM restart because X properties
+  # live on the server. Existing clients keep their numeric EWMH assignments,
+  # while stable keys and metadata are reconstructed before they are adopted.
+  def read_desktop_snapshot
+    generation = root_cardinals(:_RWM_DESKTOP_GENERATION, length: 1).first
+    count = root_cardinals(:_NET_NUMBER_OF_DESKTOPS, length: 1).first.to_i
+    return if generation.nil? || count < 1 || count > 256
+
+    keys = root_utf8_list(:_RWM_DESKTOP_KEYS)
+    names = root_utf8_list(:_NET_DESKTOP_NAMES)
+    projects = root_utf8_list(:_RWM_DESKTOP_PROJECTS)
+    groups = root_utf8_list(:_RWM_DESKTOP_GROUPS)
+    modes = root_cardinals(:_RWM_DESKTOP_MODES)
+    flags = root_cardinals(:_RWM_DESKTOP_FLAGS)
+    return unless [keys, names, projects, groups, modes, flags].all? {
+      _1.length == count
+    }
+    return if keys.any?(&:empty?) || keys.uniq.length != count
+
+    records = count.times.map do |id|
+      {
+        key: keys[id],
+        name: names[id],
+        project: projects[id].empty? ? nil : projects[id],
+        group: groups[id].empty? ? nil : groups[id],
+        mode: Desktop::MODE_CODES.key(modes[id]) || :tiled,
+        flags: flags[id].to_i,
+      }
+    end
+    {
+      generation: generation,
+      records: records,
+      visible: root_cardinals(:_RWM_VISIBLE_DESKTOPS,
+                              length: 256),
+      history: root_cardinals(:_RWM_DESKTOP_HISTORY,
+                              length: 65_536),
+    }
+  rescue X11::Error => e
+    $logger.debug { "error reading desktop snapshot: #{e.message}" }
+    nil
+  end
+
+  def configured_desktop_records(config)
+    count = config.dig(:desktops, :number) || 10
+    count.times.map do |num|
+      desktop_config = config.fetch(:desktops, {})
+      configured = desktop_config.key?(num + 1)
+      c = desktop_config[num + 1] || {}
+      flags = if configured
+        Desktop::FLAG_STATIC
+      else
+        Desktop::FLAG_SLOT_BACKED | Desktop::FLAG_AVAILABLE
+      end
+      flags |= Desktop::FLAG_PINNED if c[:pinned]
+      flags |= Desktop::FLAG_GROUP_ROOT if c[:group_root]
+      if c[:desktop]
+        flags |= Desktop::FLAG_DESKTOP_WINDOW | Desktop::FLAG_PINNED
+      end
+      {
+        key: (c[:key] || "desktop-#{num + 1}").to_s,
+        name: (c[:name] || (num + 1).to_s).to_s,
+        project: c[:project]&.to_s,
+        group: c[:group]&.to_s,
+        mode: c[:layout] == "floating" ? :floating : :tiled,
+        flags: flags,
+        config: c,
+      }
+    end
+  end
+
+  def merge_desktop_records(configured, snapshot)
+    return configured unless snapshot
+
+    snapshot_records = snapshot[:records].map(&:dup)
+    records = configured.each_with_index.map do |configured_record, index|
+      prior = snapshot_records[index]
+
+      if configured_record[:flags] & Desktop::FLAG_STATIC != 0
+        # Explicit numbered configuration owns its numeric slot. Configuration
+        # remains authoritative for its identity, mode, flags, and layout.
+        configured_record
+      elsif prior &&
+            prior[:flags] & Desktop::FLAG_SLOT_BACKED != 0
+        # A placeholder or project lease remains at the same keyboard address.
+        prior.merge(config: configured_record[:config])
+      else
+        # Upgrade snapshots from before slot flags existed to the new implicit
+        # placeholder model instead of treating all ten initial slots as static.
+        configured_record
+      end
+    end
+
+    # Snapshot records beyond the configured compatibility pool are genuine
+    # appended dynamic desktops. Keep them in their existing EWMH order.
+    records.concat(snapshot_records.drop(configured.length))
+    records
+  end
+
+  # Before the group-aware allocator existed, every project leased an initial
+  # numeric slot. That made secondary projects steal independent Super+n
+  # addresses. Keep one numeric address per group and move every additional
+  # slot-backed child to the overflow tail, restoring its numeric placeholder.
+  def normalize_group_child_leases(records, configured)
+    normalized = records.map(&:dup)
+    by_group = Hash.new { |hash, key| hash[key] = [] }
+    normalized.each_with_index do |record, index|
+      group = record[:group].to_s.strip
+      next if group.empty? || index >= configured.length
+      next if record[:flags].to_i & Desktop::FLAG_AVAILABLE != 0
+      by_group[group] << [index, record]
+    end
+
+    move_indices = by_group.values.flat_map do |entries|
+      root = entries.find {
+        _2[:flags].to_i & Desktop::FLAG_GROUP_ROOT != 0
+      }
+      configured_entry = entries.find {
+        _2[:flags].to_i & Desktop::FLAG_STATIC != 0
+      }
+      keep_index = (root || configured_entry || entries.first)&.first
+      entries.filter_map do |index, record|
+        next if index == keep_index
+        index if record[:flags].to_i & Desktop::FLAG_SLOT_BACKED != 0
+      end
+    end.sort
+
+    remap = {}
+    moved = move_indices.map do |index|
+      record = normalized[index].dup
+      record[:flags] &= ~(Desktop::FLAG_SLOT_BACKED |
+                          Desktop::FLAG_AVAILABLE)
+      record[:config] = nil
+      remap[index] = normalized.length + remap.length
+      normalized[index] = configured[index].dup
+      record
+    end
+    [normalized.concat(moved), remap]
+  end
+
+  def process_config(config, snapshot = nil)
     process_monitors
 
     # FIXME: Move to each monitor.
     @floating = FloatingLayout.new(self)
 
-    num_desktops = config.dig(:desktops, :number) || 10
-    @desktops ||= num_desktops.times.map do |num|
-      c = config.dig(:desktops, num+1)
-      name = c&.dig(:name) || (num+1).to_s
+    configured = configured_desktop_records(config)
+    @initial_desktop_count = configured.length
+    records = merge_desktop_records(configured, snapshot)
+    records, @desktop_index_remap =
+      normalize_group_child_leases(records, configured)
+    keys = records.map { _1[:key] }
+    raise ArgumentError, "desktop keys must be unique" if keys.uniq != keys
+    @desktops = records.each_with_index.map do |record, id|
+      Desktop.new(self, id, record[:name],
+                  key: record[:key],
+                  project: record[:project],
+                  group: record[:group],
+                  mode: record[:mode],
+                  flags: record[:flags])
+    end
 
-      # The desktop flagged `desktop: true` hosts desktop-type windows (the
-      # icon/backdrop surface). We publish its id so that client can read it
-      # instead of hardcoding a desktop number (see #publish_desktop_window_host).
-      @desktop_window_desktop = num if c&.dig(:desktop)
+    visible = snapshot&.dig(:visible) || []
+    used = []
+    @monitors.each_with_index do |monitor, monitor_id|
+      requested = visible[monitor_id]
+      requested = @desktop_index_remap.fetch(requested, requested) if requested
+      desktop = @desktops[requested] if requested && requested != UINT32_MAX
+      desktop = nil if desktop && used.include?(desktop)
+      desktop ||= @desktops.find { !used.include?(_1) }
+      monitor.active_desktop = desktop
+      used << desktop if desktop
+    end
+    restore_desktop_history(snapshot)
 
-      Desktop.new(self, num, name).tap do |d|
+    @desktops.each_with_index do |desktop, id|
+      record = records[id]
+      @desktop_window_desktop = desktop if desktop.desktop_window?
+      next if desktop.mode == :floating
 
-        # FIXME: Check EWMH hints first.
-        # Associate desktop with monitor for per-monitor desktop support
-        # On startup, each monitor shows a different desktop in sequence
-        # (monitor 1 shows desktop 1, monitor 2 shows desktop 2, etc.)
-        if num < @monitors.size
-          monitor = @monitors[num]
-          monitor.active_desktop = d
+      desktop.layout = TiledLayout.new(desktop, desktop.geometry)
+      process_node_config(desktop.layout.root, record[:config])
+    end
+  end
+
+  # History is held as Desktop objects, so explicit renumbering preserves it.
+  # On the root it is a fixed-width MRU row per monitor, padded with UINT32_MAX.
+  def restore_desktop_history(snapshot)
+    old_count = snapshot&.dig(:records)&.length.to_i
+    raw = snapshot&.dig(:history) || []
+    @desktop_history = @monitors.each_with_index.map do |monitor, monitor_id|
+      restored = if old_count.positive?
+        raw.slice(monitor_id * old_count, old_count).to_a.filter_map do |id|
+          next if id == UINT32_MAX
+          @desktops[(@desktop_index_remap || {}).fetch(id, id)]
         end
+      else
+        []
+      end
+      restored = restored.select { @desktops.include?(_1) }.uniq
+      active = monitor.active_desktop
+      active ? [active, *restored.reject { _1 == active }] : restored
+    end
+  end
 
-        if c&.dig(:layout) == "floating"
-          # FIXME: Should be ok to set this to @floating
-          # but some logic checks for a nil layout
-          d.layout = nil
-        else
-          # Use monitor-specific geometry for the layout
-          d.layout = TiledLayout.new(d, d.geometry)
-          process_node_config(d.layout.root, c)
+  def remember_desktop(monitor, desktop)
+    return unless monitor && desktop
+    history = (@desktop_history[monitor.id] ||= [])
+    history.delete(desktop)
+    history.unshift(desktop)
+  end
+
+  def forget_desktop(desktop)
+    @desktop_history&.each { _1.delete(desktop) }
+  end
+
+  def desktop_history_indices
+    count = @desktops.length
+    @monitors.flat_map do |monitor|
+      history = Array(@desktop_history[monitor.id])
+                  .select { @desktops.include?(_1) }
+                  .uniq
+                  .first(count)
+                  .map(&:id)
+      history + Array.new(count - history.length, UINT32_MAX)
+    end
+  end
+
+  def publish_desktop_history
+    change_property(:_RWM_DESKTOP_HISTORY, :cardinal,
+                    desktop_history_indices)
+  end
+
+  def desktop_navigation_for(monitor)
+    rows = @desktops.map do |desktop|
+      {
+        index: desktop.id,
+        key: desktop.key,
+        name: desktop.name,
+        project: desktop.project,
+        group: desktop.group,
+        mode: desktop.mode,
+        flags: desktop.flags,
+        occupied: !desktop.children.empty?,
+      }
+    end
+    history = Array(@desktop_history[monitor.id]).map(&:id)
+    DesktopNavigation.new(
+      rows,
+      current: monitor.active_desktop&.id,
+      history: history,
+    )
+  end
+
+  def desktop_for_group_address(address, monitor)
+    desktop_navigation_for(monitor).group_target(address)
+  end
+
+  def append_desktop(key:, name:, project: nil, group: nil, mode: :tiled,
+                     flags: 0, publish: true)
+    raise ArgumentError, "desktop key is already in use" if @desktops.any? {
+      _1.key == key
+    }
+
+    desktop = Desktop.new(self, @desktops.length, name,
+                          key: key, project: project, group: group,
+                          mode: mode, flags: flags)
+    if mode == :tiled
+      desktop.layout = TiledLayout.new(desktop, desktop.geometry)
+    end
+    @desktops << desktop
+    publish_desktop_state if publish
+    desktop
+  end
+
+  # Rebar's top-bar "+" needs no naming policy or filesystem access. It asks
+  # RubyWM for one temporary empty view in the current group; the user can then
+  # re-key and describe that active view through `rwmctl edit current`.
+  def add_group_view(monitor)
+    source = monitor&.active_desktop
+    raise ArgumentError, "monitor does not exist" unless source
+    group = source.group.to_s.strip
+    raise ArgumentError, "current desktop has no group" if group.empty?
+
+    desktop = append_desktop(
+      key: next_automatic_desktop_key,
+      name: "New view",
+      project: source.project,
+      group: group,
+      mode: :tiled,
+    )
+    change_desktop_on_monitor(monitor, desktop)
+    desktop
+  end
+
+  def reusable_desktop(excluding: nil)
+    @desktops.find do |desktop|
+      next if desktop == excluding
+      desktop.available_placeholder? &&
+        !desktop.static? &&
+        !desktop.pinned? &&
+        !desktop.desktop_window? &&
+        !desktop.active? &&
+        desktop.children.empty?
+    end
+  end
+
+  def reset_available_desktop(desktop, id)
+    forget_desktop(desktop)
+    desktop.id = id
+    desktop.key = "desktop-#{id + 1}"
+    desktop.name = (id + 1).to_s
+    desktop.project = nil
+    desktop.group = nil
+    desktop.mode = :tiled
+    desktop.flags = Desktop::FLAG_SLOT_BACKED | Desktop::FLAG_AVAILABLE
+    desktop.layout = TiledLayout.new(desktop, desktop.geometry)
+    desktop
+  end
+
+  def trim_trailing_available_desktops
+    minimum = @initial_desktop_count || 1
+    while @desktops.length > minimum
+      desktop = @desktops.last
+      break unless desktop.available_placeholder? &&
+                   !desktop.active? &&
+                   desktop.children.empty?
+      forget_desktop(desktop)
+      @desktops.pop
+    end
+  end
+
+  # Move a dynamic desktop into an existing reusable slot without recreating
+  # its windows or layout. Desktop and monitor references point to the Desktop
+  # object, so changing that object's EWMH id moves the complete view atomically.
+  def move_desktop(source_index, target_index: nil, publish: true)
+    source = @desktops[source_index]
+    return { ok: false, error: "desktop does not exist" } unless source
+    if source.static? || source.pinned? || source.desktop_window?
+      return { ok: false, error: "configured or pinned desktops cannot be renumbered" }
+    end
+    if source.available_placeholder?
+      return { ok: false, error: "source desktop is an empty placeholder" }
+    end
+
+    target = target_index.nil? ? reusable_desktop(excluding: source) :
+                                 @desktops[target_index]
+    return { ok: false, error: "no reusable desktop slot is available" } unless target
+    unless target.available_placeholder? &&
+           !target.static? &&
+           !target.pinned? &&
+           !target.desktop_window? &&
+           !target.active? &&
+           target.children.empty?
+      return { ok: false, error: "target desktop is not an empty reusable slot" }
+    end
+    return { ok: false, error: "source and target are the same desktop" } if
+      source == target
+
+    old_index = source.id
+    new_index = target.id
+    if new_index < (@initial_desktop_count || 0) &&
+       group_has_numeric_address?(source.group, excluding: source)
+      return {
+        ok: false,
+        error: "group already has a numeric desktop address",
+      }
+    end
+
+    @desktops[new_index] = source
+    @desktops[old_index] = target
+
+    source.id = new_index
+    source.flags &= ~(Desktop::FLAG_STATIC | Desktop::FLAG_AVAILABLE)
+    source.flags |= Desktop::FLAG_SLOT_BACKED
+    reset_available_desktop(target, old_index)
+    trim_trailing_available_desktops
+    @desktops.each_with_index { |desktop, id| desktop.id = id }
+
+    @windows.each_value(&:publish_desktop)
+    monitor = source.monitor
+    point_layout_at(source, monitor) if monitor
+    current = active_monitor&.active_desktop || @primary_monitor&.active_desktop
+    @current_desktop_id = current&.id || 0
+    publish_desktop_state if publish
+    {
+      ok: true,
+      key: source.key,
+      from: old_index,
+      desktop: source.id,
+      number: source.id + 1,
+      count: @desktops.length,
+    }
+  end
+
+  def lease_desktop(desktop, key:, name:, project:, group:, mode:, flags:)
+    desktop.key = key
+    desktop.name = name
+    desktop.project = project
+    desktop.group = group
+    desktop.mode = mode
+    desktop.flags = Desktop::FLAG_SLOT_BACKED | flags
+    desktop.layout = if mode == :tiled
+      TiledLayout.new(desktop, desktop.geometry)
+    end
+    desktop
+  end
+
+  def group_already_addressed?(group, excluding: nil)
+    group = group.to_s.strip
+    return false if group.empty?
+    @desktops.any? do |desktop|
+      desktop != excluding &&
+        !desktop.available_placeholder? &&
+        desktop.group.to_s.strip == group
+    end
+  end
+
+  def group_has_numeric_address?(group, excluding: nil)
+    group = group.to_s.strip
+    return false if group.empty?
+    @desktops.first(@initial_desktop_count).any? do |desktop|
+      desktop != excluding &&
+        !desktop.available_placeholder? &&
+        desktop.group.to_s.strip == group
+    end
+  end
+
+  def secondary_group_slot?(desktop)
+    return false unless desktop.slot_backed?
+    return false unless desktop.id < (@initial_desktop_count || 0)
+    group = desktop.group.to_s.strip
+    return false if group.empty?
+    peers = @desktops.first(@initial_desktop_count).select do |candidate|
+      !candidate.available_placeholder? &&
+        candidate.group.to_s.strip == group
+    end
+    keep = peers.find(&:group_root?) ||
+           peers.find(&:static?) ||
+           peers.min_by(&:id)
+    keep && keep != desktop
+  end
+
+  # Move a secondary project out of the fixed numeric pool while keeping the
+  # Desktop object itself. Windows, monitor ownership, layout, and MRU history
+  # therefore follow it; the vacated number becomes an ordinary empty desktop.
+  def rehome_group_child_to_tail(desktop, publish: true)
+    raise ArgumentError, "desktop limit reached" if @desktops.length >= 256
+    old_index = desktop.id
+    base_key = "desktop-#{old_index + 1}"
+    desktop.key = next_automatic_desktop_key if desktop.key == base_key
+    placeholder = Desktop.new(
+      self,
+      old_index,
+      (old_index + 1).to_s,
+      key: base_key,
+      mode: :tiled,
+      flags: Desktop::FLAG_SLOT_BACKED | Desktop::FLAG_AVAILABLE,
+    )
+    placeholder.layout = TiledLayout.new(placeholder, placeholder.geometry)
+    @desktops[old_index] = placeholder
+    desktop.id = @desktops.length
+    desktop.flags &= ~(Desktop::FLAG_SLOT_BACKED | Desktop::FLAG_AVAILABLE)
+    @desktops << desktop
+    @windows.each_value(&:publish_desktop)
+
+    monitor = desktop.monitor
+    point_layout_at(desktop, monitor) if monitor
+    current = active_monitor&.active_desktop ||
+              @primary_monitor&.active_desktop
+    @current_desktop_id = current&.id || 0
+    publish_desktop_state if publish
+    desktop
+  end
+
+  def next_automatic_desktop_key
+    serials = @desktops.filter_map do |desktop|
+      desktop.key[/\Adesktop-(\d+)\z/, 1]&.to_i
+    end
+    serial = [serials.max.to_i + 1, @desktops.length + 1].max
+    serial += 1 while @desktops.any? { _1.key == "desktop-#{serial}" }
+    "desktop-#{serial}"
+  end
+
+  # Idempotently resolve a stable project key to an EWMH desktop index.
+  def ensure_desktop(spec)
+    key = validated_desktop_key(spec["key"])
+
+    mode_name = (spec["mode"] || "tiled").to_s
+    unless %w[tiled floating].include?(mode_name)
+      raise ArgumentError, "mode must be tiled or floating"
+    end
+    mode = mode_name.to_sym
+
+    if desktop = @desktops.find { _1.key == key }
+      if spec.key?("group") && spec.key?("rename_group")
+        raise ArgumentError, "group assignment and group re-key cannot be combined"
+      end
+
+      new_key = if spec.key?("new_key")
+        validated_desktop_key(spec["new_key"], field: "new desktop key")
+      else
+        desktop.key
+      end
+      if new_key != desktop.key &&
+         @desktops.any? { _1 != desktop && _1.key == new_key }
+        raise ArgumentError, "desktop key is already in use: #{new_key}"
+      end
+
+      if spec.key?("mode") && desktop.mode != mode
+        unless desktop.children.empty?
+          raise ArgumentError, "a non-empty desktop's mode cannot be changed"
         end
       end
+
+      metadata = {
+        "name" => [:name, 512],
+        "project" => [:project, 4096],
+        "group" => [:group, 512],
+      }.filter_map do |field, (attribute, limit)|
+        next unless spec.key?(field)
+        value = desktop_metadata_string(spec[field], field, limit)
+        raise ArgumentError, "name cannot be empty" if field == "name" &&
+          (value.nil? || value.empty?)
+        [attribute, value]
+      end
+
+      new_group = nil
+      group_members = []
+      if spec.key?("rename_group")
+        new_group = desktop_metadata_string(
+          spec["rename_group"], "group", 512
+        ).to_s.strip
+        raise ArgumentError, "new group key cannot be empty" if new_group.empty?
+        old_group = desktop.group.to_s.strip
+        if !old_group.empty? && old_group != new_group
+          group_members = @desktops.select {
+            _1.group.to_s.strip == old_group
+          }
+          if @desktops.any? {
+            !group_members.include?(_1) && _1.group.to_s.strip == new_group
+          }
+            raise ArgumentError, "group key is already in use: #{new_group}"
+          end
+        end
+      end
+
+      changed = false
+      if new_key != desktop.key
+        desktop.key = new_key
+        changed = true
+      end
+      if spec.key?("mode") && desktop.mode != mode
+        desktop.mode = mode
+        desktop.layout = mode == :tiled ?
+          TiledLayout.new(desktop, desktop.geometry) : nil
+        changed = true
+      end
+      metadata.each do |attribute, value|
+        next if desktop.public_send(attribute) == value
+        desktop.public_send("#{attribute}=", value)
+        changed = true
+      end
+      if new_group
+        targets = group_members.empty? ? [desktop] : group_members
+        targets.each do |member|
+          next if member.group.to_s.strip == new_group
+          member.group = new_group
+          changed = true
+        end
+      end
+      if spec["pinned"] && !desktop.pinned?
+        desktop.flags |= Desktop::FLAG_PINNED
+        changed = true
+      end
+      if changed && desktop.available_placeholder?
+        desktop.flags &= ~Desktop::FLAG_AVAILABLE
+      end
+      if secondary_group_slot?(desktop)
+        rehome_group_child_to_tail(desktop, publish: false)
+        changed = true
+      end
+      publish_desktop_state if changed
+      return {
+        ok: true,
+        desktop: desktop.id,
+        key: desktop.key,
+        created: false,
+        updated: changed,
+      }
     end
+    if spec["update_only"]
+      raise ArgumentError, "desktop key does not exist: #{key}"
+    end
+    raise ArgumentError, "desktop limit reached" if @desktops.length >= 256
+
+    name = desktop_metadata_string(spec["name"] || key, "name", 512)
+    raise ArgumentError, "name cannot be empty" if name.empty?
+    project = desktop_metadata_string(spec["project"], "project", 4096)
+    group = desktop_metadata_string(spec["group"], "group", 512)
+    flags = spec["pinned"] ? Desktop::FLAG_PINNED : 0
+    candidate = reusable_desktop unless group_already_addressed?(group)
+    desktop = if candidate
+      lease_desktop(
+        candidate,
+        key: key,
+        name: name,
+        project: project,
+        group: group,
+        mode: mode,
+        flags: flags,
+      ).tap { publish_desktop_state }
+    else
+      append_desktop(
+        key: key,
+        name: name,
+        project: project,
+        group: group,
+        mode: mode,
+        flags: flags,
+      )
+    end
+    {
+      ok: true,
+      desktop: desktop.id,
+      key: key,
+      created: true,
+      leased: desktop.slot_backed?,
+    }
+  end
+
+  def validated_desktop_key(value, field: "desktop key")
+    value = value.to_s
+    raise ArgumentError, "#{field} is required" if value.empty?
+    raise ArgumentError, "#{field} contains a NUL" if value.include?("\0")
+    raise ArgumentError, "#{field} is too long" if value.bytesize > 512
+    value
+  end
+
+  def desktop_metadata_string(value, field, limit)
+    return if value.nil?
+    value = value.to_s
+    raise ArgumentError, "#{field} contains a NUL" if value.include?("\0")
+    raise ArgumentError, "#{field} is too long" if value.bytesize > limit
+    value
+  end
+
+  def replacement_desktop_for(target, preferred, occupied)
+    candidates = [preferred, *@desktops].compact.uniq
+    candidates.find { _1 != target && !occupied.include?(_1) }
+  end
+
+  # Remove a desktop, optionally moving its clients to a fallback first.
+  # Configured/pinned desktops and non-empty desktops are protected unless the
+  # caller explicitly forces removal.
+  def remove_desktop(index, force: false, fallback_index: nil, publish: true)
+    target = @desktops[index]
+    return { ok: false, error: "desktop does not exist" } unless target
+    if !target.slot_backed? && @desktops.length <= @monitors.length
+      return { ok: false, error: "one visible desktop per monitor is required" }
+    end
+    if !force && (target.static? || target.pinned?)
+      return { ok: false, error: "desktop is configured or pinned" }
+    end
+    if !force && target.active?
+      return { ok: false, error: "desktop is visible" }
+    end
+    if target.slot_backed?
+      base_key = "desktop-#{target.id + 1}"
+      if @desktops.any? { _1 != target && _1.key == base_key }
+        return { ok: false, error: "base desktop key is already in use" }
+      end
+    end
+
+    children = target.children
+    if !force && !children.empty?
+      return { ok: false, error: "desktop is not empty" }
+    end
+
+    if fallback_index && !@desktops[fallback_index]
+      return { ok: false, error: "fallback desktop does not exist" }
+    end
+    fallback = @desktops[fallback_index] if fallback_index
+    fallback = nil if fallback == target
+    if !children.empty? || target.active? || !target.slot_backed?
+      fallback ||= @desktops[index.zero? ? 1 : index - 1]
+      return { ok: false, error: "no fallback desktop" } unless fallback
+    end
+
+    children.dup.each { move_to_desktop(_1.wid, fallback.id) }
+
+    affected = @monitors.select { _1.active_desktop == target }
+    occupied = @monitors.reject { affected.include?(_1) }
+                        .map(&:active_desktop).compact
+    target.hide
+    affected.each do |monitor|
+      replacement = replacement_desktop_for(target, fallback, occupied)
+      return { ok: false, error: "no unused replacement desktop" } unless replacement
+      monitor.active_desktop = replacement
+      remember_desktop(monitor, replacement)
+      occupied << replacement
+      point_layout_at(replacement, monitor)
+      replacement.show
+    end
+
+    removed_id = target.id
+    removed_key = target.key
+    released = target.slot_backed?
+    forget_desktop(target)
+    if released
+      base_key = "desktop-#{target.id + 1}"
+      target.key = base_key
+      target.name = (target.id + 1).to_s
+      target.project = nil
+      target.group = nil
+      target.mode = :tiled
+      target.flags = Desktop::FLAG_SLOT_BACKED | Desktop::FLAG_AVAILABLE
+      target.layout = TiledLayout.new(target, target.geometry)
+    else
+      @desktops.delete_at(index)
+      @desktops.each_with_index { |desktop, id| desktop.id = id }
+      @windows.each_value(&:publish_desktop)
+      @desktop_window_desktop = nil if @desktop_window_desktop == target
+    end
+
+    current = active_monitor&.active_desktop || @primary_monitor&.active_desktop
+    @current_desktop_id = current&.id || 0
+    publish_desktop_state if publish
+    {
+      ok: true,
+      desktop: removed_id,
+      key: removed_key,
+      fallback: fallback&.id,
+      released: released,
+    }
+  end
+
+  def set_number_of_desktops(count)
+    count = count.to_i
+    return false if count < @monitors.length || count > 256
+    return true if count == @desktops.length
+
+    if count > @desktops.length
+      (count - @desktops.length).times do
+        id = @desktops.length
+        append_desktop(key: next_automatic_desktop_key,
+                       name: (id + 1).to_s,
+                       flags: Desktop::FLAG_SLOT_BACKED |
+                              Desktop::FLAG_AVAILABLE,
+                       publish: false)
+      end
+    else
+      removed = @desktops[count..]
+      return false unless removed.all? do |desktop|
+        desktop.available_placeholder? &&
+          !desktop.static? &&
+          !desktop.pinned? &&
+          !desktop.active? &&
+          desktop.children.empty?
+      end
+      removed.each { forget_desktop(_1) }
+      @desktops.slice!(count, @desktops.length - count)
+    end
+    publish_desktop_state
+    true
+  end
+
+  def read_utf8_property(wid, atom)
+    @dpy.get_property(wid, atom, dpy.atom(:UTF8_STRING),
+                      length: 16_384)&.value.to_s
+  end
+
+  def write_desktop_reply(wid, reply)
+    return if !wid || wid == root_id
+    body = JSON.generate(reply.merge(generation: @desktop_generation))
+    @dpy.change_property(:replace, wid, :_RWM_DESKTOP_REPLY,
+                         dpy.atom(:UTF8_STRING), 8, body.bytes)
+  rescue X11::Error => e
+    $logger.debug { "error writing desktop reply to #{wid}: #{e.message}" }
   end
   
 
@@ -365,6 +1234,7 @@ class WindowManager
   def update_client_list
     change_property(:_NET_CLIENT_LIST, :window, @windows.keys)
     update_client_list_stacking
+    publish_desktop_occupancy
   end
 
   # _NET_CLIENT_LIST_STACKING: managed windows in bottom-to-top stacking order.
@@ -426,6 +1296,9 @@ class WindowManager
     w.set_border(@border_normal)
 
     desktop = dpy.get_property(wid, :_NET_WM_DESKTOP, :cardinal)&.value
+    desktop = Array(desktop).first
+    desktop = @desktop_index_remap.fetch(desktop, desktop) if
+      desktop && @desktop_index_remap
     if !desktop
       monitor = active_monitor
       desktop = monitor.active_desktop.id
@@ -503,20 +1376,23 @@ class WindowManager
     end
 
     w.desktop = d
-    
+
+    # Keep inactive layouts populated too. This matters when adopting mapped
+    # clients after a WM restart: they already exist, so no later MapRequest
+    # will place them before their desktop is shown.
+    if !w.floating? && d.layout && !d.layout.find(w)
+      d.layout.place(w, @focus)
+    end
+
     if d.active?
       w.show
-      
-      # If moving to an active desktop, add to layout and update focus
-      if !w.floating? && d.layout
-        d.layout.place(w, @focus)
-      end
     else
       w.hide
     end
     
     d.update_layout if d.active?
     old.update_layout if old&.active?
+    publish_desktop_occupancy
   end
 
   def change_desktop(d) = change_desktop_on_monitor(active_monitor, d)
@@ -529,7 +1405,10 @@ class WindowManager
 
     # Already showing the target on this monitor: just refresh.
     if current == target
+      remember_desktop(curr_monitor, target)
       update_layout
+      publish_desktop_history
+      publish_desktop_generation
       return target.show
     end
 
@@ -543,10 +1422,12 @@ class WindowManager
     # (floating windows reposition on show, not via the layout).
     target.hide if other
     curr_monitor.active_desktop = target
+    remember_desktop(curr_monitor, target)
 
     if other
       other.active_desktop = current
       if current
+        remember_desktop(other, current)
         point_layout_at(current, other)
         current.show
         set_current_desktop(current.id, other)
@@ -610,7 +1491,16 @@ class WindowManager
   def on_error(ev) = destroy_window(ev.bad_resource_id)
 
   def on_map_notify(ev)      = (window(ev.window)&.mapped = true)
-  def on_unmap_notify(ev)    = (window(ev.window)&.mapped = false)
+  def on_unmap_notify(ev)
+    w = window(ev.window)
+    return unless w
+    w.mapped = false
+    if w.dock?
+      invalidate_struts
+      publish_workarea
+      update_layout
+    end
+  end
   def on_map_request(ev)     = map_window(ev.window)
 
   # ConfigureWindow value-mask bits and stack_mode values (X11 core protocol).
@@ -737,6 +1627,7 @@ class WindowManager
     w.configure(stack_mode: detail)
   end
 
+  def on_net_number_of_desktops(_, count) = set_number_of_desktops(count)
   def on_net_current_desktop(_, d) = change_desktop(d)
 
   # EWMH _NET_WM_STATE: a message carries an action (remove/add/toggle) and up
@@ -766,7 +1657,103 @@ class WindowManager
   def on_wm_delete_window(*) = @focus&.request_close
 
   # # RWM specific ClientMessages
-  
+
+  # Ensure a desktop from a JSON _RWM_DESKTOP_SPEC property on the requester
+  # window. The result is written back as JSON in _RWM_DESKTOP_REPLY.
+  def on_rwm_ensure_desktop(requestor, version, _unused1, _unused2,
+                            _unused3, _unused4)
+    if version != DESKTOP_PROTOCOL_VERSION
+      return write_desktop_reply(
+        requestor,
+        ok: false,
+        error: "unsupported desktop protocol version #{version}",
+      )
+    end
+
+    spec = JSON.parse(read_utf8_property(requestor, :_RWM_DESKTOP_SPEC))
+    monitor = if spec["view"]
+      candidate = if spec["monitor"].nil?
+        active_monitor
+      else
+        @monitors[Integer(spec["monitor"])]
+      end
+      raise ArgumentError, "monitor does not exist" unless candidate
+      candidate
+    end
+
+    reply = ensure_desktop(spec)
+    if monitor
+      change_desktop_on_monitor(monitor, reply[:desktop])
+    end
+    write_desktop_reply(requestor, reply)
+  rescue JSON::ParserError, ArgumentError, TypeError => e
+    write_desktop_reply(requestor, ok: false, error: e.message)
+  end
+
+  def on_rwm_view_desktop(_, desktop, monitor_id, _unused1, _unused2,
+                          _unused3)
+    monitor = monitor_id == UINT32_MAX ? active_monitor : @monitors[monitor_id]
+    change_desktop_on_monitor(monitor, desktop) if monitor
+  end
+
+  # Numeric keybindings address Rebar's high-level contexts, not the flat EWMH
+  # backing desktop at the same number. data[1] is monitor+1; zero means active.
+  def on_rwm_view_group(_, address, monitor_token, _unused1, _unused2,
+                        _unused3)
+    monitor = monitor_token.zero? ? active_monitor :
+                                    @monitors[monitor_token - 1]
+    return unless monitor
+    desktop = desktop_for_group_address(address, monitor)
+    change_desktop_on_monitor(monitor, desktop)
+  rescue ArgumentError => e
+    $logger.debug { "ignoring _RWM_VIEW_GROUP #{address}: #{e.message}" }
+  end
+
+  def on_rwm_send_to_group(wid, address, monitor_token, _unused1, _unused2,
+                           _unused3)
+    monitor = monitor_token.zero? ? active_monitor :
+                                    @monitors[monitor_token - 1]
+    return unless monitor
+    target = desktop_for_group_address(address, monitor)
+    client = @windows[wid] || @focus
+    move_to_desktop(client.wid, target) if client
+  rescue ArgumentError => e
+    $logger.debug { "ignoring _RWM_SEND_TO_GROUP #{address}: #{e.message}" }
+  end
+
+  # Add a temporary empty tiled view to the group shown on a monitor. Rebar
+  # sends monitor+1; zero retains the active-monitor convention.
+  def on_rwm_add_group_view(_, monitor_token, _unused1, _unused2, _unused3,
+                            _unused4)
+    monitor = monitor_token.zero? ? active_monitor :
+                                    @monitors[monitor_token - 1]
+    add_group_view(monitor)
+  rescue ArgumentError => e
+    $logger.debug { "ignoring _RWM_ADD_GROUP_VIEW: #{e.message}" }
+  end
+
+  def on_rwm_remove_desktop(requestor, desktop, flags, fallback,
+                            _unused1, _unused2)
+    fallback = nil if fallback == UINT32_MAX
+    reply = remove_desktop(desktop,
+                           force: flags & REMOVE_FORCE != 0,
+                           fallback_index: fallback)
+    write_desktop_reply(requestor, reply)
+  end
+
+  def on_rwm_move_desktop(requestor, version, desktop, target,
+                          _unused1, _unused2)
+    if version != DESKTOP_PROTOCOL_VERSION
+      return write_desktop_reply(
+        requestor,
+        ok: false,
+        error: "unsupported desktop protocol version #{version}",
+      )
+    end
+    target = nil if target == UINT32_MAX
+    reply = move_desktop(desktop, target_index: target)
+    write_desktop_reply(requestor, reply)
+  end
 
   # Move window to the desktop shown on adjacent monitor
   # Usage: xclimsg -mp _RWM_MOVE_TO_MONITOR <direction>

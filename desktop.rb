@@ -3,9 +3,35 @@
 require_relative 'monitor'
 
 class Desktop
-  attr_accessor :name, :id, :wm, :layout, :window
+  FLAG_STATIC         = 1 << 0
+  FLAG_PINNED         = 1 << 1
+  FLAG_DESKTOP_WINDOW = 1 << 2
+  FLAG_GROUP_ROOT     = 1 << 3
+  FLAG_SLOT_BACKED    = 1 << 4
+  FLAG_AVAILABLE      = 1 << 5
 
-  def initialize(wm, id, name) = (@wm, @id, @name = wm, id, name)
+  MODE_CODES = { tiled: 0, floating: 1 }.freeze
+
+  attr_accessor :name, :id, :wm, :layout, :window, :key, :project, :group,
+                :mode, :flags
+
+  def initialize(wm, id, name, key: nil, project: nil, group: nil,
+                 mode: :tiled, flags: 0)
+    @wm, @id, @name = wm, id, name
+    @key = (key || "desktop-#{id + 1}").to_s
+    @project = project&.to_s
+    @group = group&.to_s
+    @mode = mode.to_sym
+    @flags = flags.to_i
+  end
+
+  def mode_code = MODE_CODES.fetch(mode, MODE_CODES[:tiled])
+  def static? = (flags & FLAG_STATIC != 0)
+  def pinned? = (flags & FLAG_PINNED != 0)
+  def desktop_window? = (flags & FLAG_DESKTOP_WINDOW != 0)
+  def group_root? = (flags & FLAG_GROUP_ROOT != 0)
+  def slot_backed? = (flags & FLAG_SLOT_BACKED != 0)
+  def available_placeholder? = (flags & FLAG_AVAILABLE != 0)
 
   # Derived from the monitors: the monitor (if any) currently showing this
   # desktop. Monitor#active_desktop is the single source of truth.
